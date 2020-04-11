@@ -1,7 +1,6 @@
 import numpy as np
 import pprint
 
-
 class Reinforce(object):
 
     def __init__(self, agent, env):
@@ -40,109 +39,134 @@ class Reinforce(object):
 
         return states, actions, rewards
 
-    def sarsa_td(self, n_episodes=1000, alpha=0.01, gamma=0.9):
+    def glie_eps_greedy(self, func, n_episodes=1000, c=0.5, min_epsilon=0.05):
         """
-        Run the sarsa control algorithm (TD0), finding the optimal policy and action function
+        Run the epsilon greedy behavior with GLIE property on func.
+        You should send func with partial so only epsilon still needs to be added.
+            from functools import partial
+            glie_eps_greedy(partial(sarsa_td, gamma= 0.8, ...)) 
         :param n_episodes: int, amount of episodes to train
-        :param alpha: learning rate
-        :param gamma: discount factor of future rewards
+        :param c: constant to use in epsilon
         :return: finds the optimal policy for move chess
         """
-        for k in range(n_episodes):
-            state = (0, 0)
-            self.env.state = state
-            episode_end = False
-            epsilon = max(1 / (1 + k), 0.05)
-            while not episode_end:
-                state = self.env.state
-                action_index = self.agent.apply_policy(state, epsilon)
-                action = self.agent.action_space[action_index]
-                reward, episode_end = self.env.step(action)
-                successor_state = self.env.state
-                successor_action_index = self.agent.apply_policy(successor_state, epsilon)
+        for k in range(1, n_episodes):
+            epsilon = max(c / k, min_epsilon)
+            func(epsilon=epsilon)
 
-                action_value = self.agent.action_function[state[0], state[1], action_index]
-                successor_action_value = self.agent.action_function[successor_state[0],
-                                                                    successor_state[1], successor_action_index]
-
-                q_update = alpha * (reward + gamma * successor_action_value - action_value)
-
-                self.agent.action_function[state[0], state[1], action_index] += q_update
-                self.agent.policy = self.agent.action_function.copy()
-
-    def sarsa_lambda(self, n_episodes=1000, alpha=0.05, gamma=0.9, lamb=0.8):
+    def sarsa_td(self, epsilon=0.1, gamma=0.9, alpha=0.05, max_steps=1000):
         """
-        Run the sarsa control algorithm (TD lambda), finding the optimal policy and action function
-        :param n_episodes: int, amount of episodes to train
+        Run the sarsa control algorithm (TD0), finding the optimal policy and action function
+        :param epsilon: exploration rate
+        :param gamma: discount factor of future rewards 
         :param alpha: learning rate
-        :param gamma: discount factor of future rewards
-        :param lamb: lambda parameter describing the decay over n-step returns
-        :return: finds the optimal move chess policy
+        :param max_steps: max amount of steps in an episode
+        :return: finds the optimal policy for move chess
         """
-        for k in range(n_episodes):
-            self.agent.E = np.zeros(shape=self.agent.action_function.shape)
-            state = (0, 0)
-            self.env.state = state
-            episode_end = False
-            epsilon = max(1 / (1 + k), 0.2)
+        state = (0, 0)
+        self.env.state = state
+        episode_end = False
+        count_steps = 0
+        while not episode_end:
+            count_steps += 1
+            state = self.env.state
             action_index = self.agent.apply_policy(state, epsilon)
             action = self.agent.action_space[action_index]
-            while not episode_end:
-                reward, episode_end = self.env.step(action)
-                successor_state = self.env.state
-                successor_action_index = self.agent.apply_policy(successor_state, epsilon)
+            reward, episode_end = self.env.step(action)
+            successor_state = self.env.state
+            successor_action_index = self.agent.apply_policy(successor_state, epsilon)
 
-                action_value = self.agent.action_function[state[0], state[1], action_index]
-                if not episode_end:
-                    successor_action_value = self.agent.action_function[successor_state[0],
-                                                                        successor_state[1], successor_action_index]
-                else:
-                    successor_action_value = 0
-                delta = reward + gamma * successor_action_value - action_value
-                self.agent.E[state[0], state[1], action_index] += 1
-                self.agent.action_function = self.agent.action_function + alpha * delta * self.agent.E
-                self.agent.E = gamma * lamb * self.agent.E
-                state = successor_state
-                action = self.agent.action_space[successor_action_index]
-                action_index = successor_action_index
-                self.agent.policy = self.agent.action_function.copy()
+            action_value = self.agent.action_function[state[0], state[1], action_index]
+            successor_action_value = self.agent.action_function[successor_state[0],
+                                                                successor_state[1], successor_action_index]
+            delta = reward + gamma * successor_action_value - action_value
 
-    def q_learning(self, n_episodes=1000, alpha=0.05, gamma=0.9):
+            self.agent.action_function[state[0], state[1], action_index] += alpha * delta
+            self.agent.policy = self.agent.action_function.copy()
+            if count_steps > max_steps:
+                episode_end = True
+
+    def sarsa_lambda(self, epsilon=0.1, gamma=0.9, alpha=0.05, lamb=0.8, max_steps=1000):
+        """
+        Run the sarsa control algorithm (TD lambda), finding the optimal policy and action function
+        :param epsilon: exploration rate
+        :param gamma: discount factor of future rewards 
+        :param alpha: learning rate
+        :param lamb: lambda parameter describing the decay over n-step returns
+        :param max_steps: max amount of steps in an episode
+        """
+        self.agent.E = np.zeros(shape=self.agent.action_function.shape)
+        state = (0, 0)
+        self.env.state = state
+        action_index = self.agent.apply_policy(state, epsilon)
+        action = self.agent.action_space[action_index]
+
+        episode_end = False
+        count_steps = 0
+        while not episode_end:
+            count_steps += 1
+            reward, episode_end = self.env.step(action)
+            successor_state = self.env.state
+            successor_action_index = self.agent.apply_policy(successor_state, epsilon)
+
+            action_value = self.agent.action_function[state[0], state[1], action_index]
+            if not episode_end:
+                successor_action_value = self.agent.action_function[successor_state[0],
+                                                                    successor_state[1], successor_action_index]
+            else:
+                successor_action_value = 0
+            delta = reward + gamma * successor_action_value - action_value
+            self.agent.E[state[0], state[1], action_index] += 1
+            self.agent.action_function[state[0], state[1], action_index] += alpha * delta * self.agent.E[state[0], state[1], action_index]
+            self.agent.E = gamma * lamb * self.agent.E
+
+            state = successor_state
+            action = self.agent.action_space[successor_action_index]
+            action_index = successor_action_index
+            self.agent.policy = self.agent.action_function.copy()
+            if count_steps > max_steps:
+                episode_end = True
+
+    def q_learning(self, epsilon=0.1, gamma=0.9, alpha=0.05, max_steps=1000):
         """
         Run Q-learning (also known as sarsa-max, finding the optimal policy and value function
-        :param n_episodes: int, amount of episodes to train
+        :param epsilon: exploration rate
+        :param gamma: discount factor of future rewards 
         :param alpha: learning rate
-        :param gamma: discount factor of future rewards
+        :param max_steps: max amount of steps in an episode
         :return: finds the optimal move chess policy
         """
-        for k in range(n_episodes):
-            state = (0, 0)
-            self.env.state = state
-            episode_end = False
-            epsilon = max(1 / (k + 1), 0.1)
-            while not episode_end:
-                action_index = self.agent.apply_policy(state, epsilon)
-                action = self.agent.action_space[action_index]
-                reward, episode_end = self.env.step(action)
-                successor_state = self.env.state
-                successor_action_index = self.agent.apply_policy(successor_state, -1)
+        state = (0, 0)
+        self.env.state = state
+        action_index = self.agent.apply_policy(state, epsilon)
+        action = self.agent.action_space[action_index]
 
-                action_value = self.agent.action_function[state[0], state[1], action_index]
-                if not episode_end:
-                    successor_action_value = self.agent.action_function[successor_state[0],
-                                                                        successor_state[1], successor_action_index]
-                else:
-                    successor_action_value = 0
+        episode_end = False
+        count_steps = 0
+        while not episode_end:
+            count_steps += 1
 
-                av_new = self.agent.action_function[state[0], state[1], action_index] + alpha * (reward +
-                                                                                                 gamma *
-                                                                                                 successor_action_value
-                                                                                                 - action_value)
-                self.agent.action_function[state[0], state[1], action_index] = av_new
-                self.agent.policy = self.agent.action_function.copy()
-                state = successor_state
+            reward, episode_end = self.env.step(action)
+            successor_state = self.env.state
+            successor_action_index = np.argmax(self.agent.policy[successor_state[0], successor_state[1], :])
 
-        # TODO(Irven) does not work properly currently. Probably because multiple steps are equally good
+            action_value = self.agent.action_function[state[0], state[1], action_index]
+            if not episode_end:
+                successor_action_value = self.agent.action_function[successor_state[0],
+                                                                    successor_state[1], successor_action_index]
+            else:
+                successor_action_value = 0
+
+            delta = reward + gamma * successor_action_value - action_value
+            self.agent.action_function[state[0], state[1], action_index] += alpha * delta
+
+            state = successor_state
+            action = self.agent.action_space[successor_action_index]
+            action_index = successor_action_index
+            self.agent.policy = self.agent.action_function.copy()
+            if count_steps > max_steps:
+                episode_end = True
+
+    # TODO(Irven) does not work properly currently. Probably because multiple steps are equally good
     # the episode breaks down too guickly. We need to check why the episode breaks down so fast.
     def monte_carlo_importance_sampling(self, target_policy, epsilon=0.1, gamma = 0.9):
         state = (0, 0)
@@ -251,10 +275,11 @@ class Reinforce(object):
             elif state in visited_states and first_visit:
                 continue
 
-    def TD_zero(self, epsilon=0.1, alpha=0.05, max_steps=1000, lamb=0.9):
+    def TD_zero(self, epsilon=0.1, gamma=0.9, alpha=0.05, max_steps=1000):
         """
         Find the value function of move chess states
         :param epsilon: exploration rate
+        :param gamma: discount factor of future rewards 
         :param alpha: learning rate
         :param max_steps: max amount of steps in an episode
         """
@@ -274,14 +299,22 @@ class Reinforce(object):
             reward, episode_end = self.env.step(action)
             suc_state = self.env.state
             self.agent.value_function[state[0], state[1]] = self.agent.value_function[state[0], state[1]] + alpha * (
-                    reward + lamb * self.agent.value_function[suc_state[0], suc_state[1]] - self.agent.value_function[
+                    reward + gamma * self.agent.value_function[suc_state[0], suc_state[1]] - self.agent.value_function[
                 state[0], state[1]])
             state = self.env.state
 
             if count_steps > max_steps:
                 episode_end = True
 
-    def TD_lambda(self, epsilon=0.1, alpha=0.05, gamma=0.9, max_steps=1000, lamb=0.9):
+    def TD_lambda(self, epsilon=0.1, gamma=0.9, alpha=0.05, lamb=0.9, max_steps=1000):
+        """
+        Find the value function of move chess states
+        :param epsilon: exploration rate
+        :param gamma: discount factor of future rewards 
+        :param alpha: learning rate
+        :param lamb: lambda parameter describing the decay over n-step returns
+        :param max_steps: max amount of steps in an episode
+        """
         self.agent.E = np.zeros(self.agent.value_function.shape)
         state = (0, 0)
         self.env.state = state
@@ -298,42 +331,42 @@ class Reinforce(object):
             actions.append(action)
             reward, episode_end = self.env.step(action)
             suc_state = self.env.state
-            delta = reward + lamb * self.agent.value_function[suc_state[0], suc_state[1]] - self.agent.value_function[
+            delta = reward + gamma * self.agent.value_function[suc_state[0], suc_state[1]] - self.agent.value_function[
                 state[0],
                 state[1]]
             self.agent.E[state[0], state[1]] += 1
 
             # Note to self: vectorize code below.
-            self.agent.value_function = self.agent.value_function + alpha * delta * self.E
+            self.agent.value_function = self.agent.value_function + alpha * delta * self.agent.E
             self.agent.E = gamma * lamb * self.agent.E
             state = self.env.state
 
             if count_steps > max_steps:
                 episode_end = True
 
-    def evaluate_state_no_policy(self, state, gamma=0.9, synchronous=True):
-        """
-        Calculates the value of a state based on the successor states and the immediate rewards.
-        Because there is no policy applied the action that results in the maximal state is chosen.
-        Args:
-            state: tuple of 2 integers 0-7 representing the state
-            gamma: float, discount factor
-            synchronous: Boolean
+        def evaluate_state_no_policy(self, state, gamma=0.9, synchronous=True):
+            """
+            Calculates the value of a state based on the successor states and the immediate rewards.
+            Because there is no policy applied the action that results in the maximal state is chosen.
+            Args:
+                state: tuple of 2 integers 0-7 representing the state
+                gamma: float, discount factor
+                synchronous: Boolean
 
-        Returns: The expected value of the state. 
+            Returns: The expected value of the state. 
 
-        """
-        state_values = []
-        for i in range(len(self.agent.action_space)): 
-            self.env.state = state  # reset state to the one being evaluated
-            reward, episode_end = self.env.step(self.agent.action_space[i])
-            if synchronous:
-                successor_state_value = self.agent.value_function_prev[self.env.state]
-            else:
-                successor_state_value = self.agent.value_function[self.env.state]
-            state_values.append(
-                    reward + gamma * successor_state_value)  # rewards and discounted successor state value
-        return np.max(state_values)
+            """
+            state_values = []
+            for i in range(len(self.agent.action_space)): 
+                self.env.state = state  # reset state to the one being evaluated
+                reward, episode_end = self.env.step(self.agent.action_space[i])
+                if synchronous:
+                    successor_state_value = self.agent.value_function_prev[self.env.state]
+                else:
+                    successor_state_value = self.agent.value_function[self.env.state]
+                state_values.append(
+                        reward + gamma * successor_state_value)  # rewards and discounted successor state value
+            return np.max(state_values)
 
     def evaluate_state(self, state, gamma=0.9, synchronous=True):
         """
@@ -373,7 +406,6 @@ class Reinforce(object):
         """
         Finds the greedy policy w.r.t. the current value function
         """
-
         self.agent.policy_prev = self.agent.policy.copy()
         for row in range(self.agent.action_function.shape[0]):
             for col in range(self.agent.action_function.shape[1]):
