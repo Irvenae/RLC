@@ -1,7 +1,6 @@
 import numpy as np
 import pprint
 
-
 class Piece(object):
 
     def __init__(self, piece='king'):
