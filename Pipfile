@@ -9,6 +9,7 @@ keras = "*"
 python-chess = "*"
 pandas = "*"
 pprint = "*"
+tensorflow = "*"
 
 [dev-packages]
 matplotlib = "*"
