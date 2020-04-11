@@ -142,6 +142,39 @@ class Reinforce(object):
                 self.agent.policy = self.agent.action_function.copy()
                 state = successor_state
 
+        # TODO(Irven) does not work properly currently. Probably because multiple steps are equally good
+    # the episode breaks down too guickly. We need to check why the episode breaks down so fast.
+    def monte_carlo_importance_sampling(self, target_policy, epsilon=0.1, gamma = 0.9):
+        state = (0, 0)
+        self.env.state = state
+
+        # Play out an episode
+        states, actions, rewards = self.play_episode(state, epsilon=epsilon)
+
+        # Sum of discounted returns
+        G = 0.0
+        # The importance sampling ratio (the weights of the returns)
+        W = 1.0
+        # For each step in the episode, backwards
+        for idx, state in reversed(list(enumerate(states))):
+            if idx == len(states) -1:
+                continue
+            print(idx, state)
+            action_index = actions[idx]
+
+            G = gamma * G + rewards[idx]
+            # Update weighted importance sampling formula denominator
+            self.agent.N_action[state[0], state[1], action_index] += W
+            
+            delta = (G - self.agent.action_function[state[0], state[1], action_index])
+            applied_weight = (W / self.agent.N_action[state[0], state[1], action_index])
+            self.agent.action_function[state[0], state[1], action_index] += applied_weight * delta
+            # If the action taken by the behavior policy is not the action 
+            # taken by the target policy the probability will be 0 and we can break
+            if action_index != np.argmax(target_policy[state[0], state[1], :]):
+                break
+            W = W * 1./ (self.agent.policy[state[0], state[1], action_index] + 0.001)
+            
     def monte_carlo_learning(self, epsilon=0.1, gamma = 0.9, first_visit=True):
         """
         Learn move chess through monte carlo control
