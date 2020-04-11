@@ -142,10 +142,12 @@ class Reinforce(object):
                 self.agent.policy = self.agent.action_function.copy()
                 state = successor_state
 
-    def monte_carlo_learning(self, epsilon=0.1):
+    def monte_carlo_learning(self, epsilon=0.1, gamma = 0.9, first_visit=True):
         """
         Learn move chess through monte carlo control
         :param epsilon: exploration rate
+        :param gamma: discount factor of future rewards 
+        :param first_visit: Boolean, count only from first occurence of state
         :return:
         """
         state = (0, 0)
@@ -154,26 +156,39 @@ class Reinforce(object):
         # Play out an episode
         states, actions, rewards = self.play_episode(state, epsilon=epsilon)
 
-        first_visits = []
+        discounts =  np.array([pow(gamma,i) for i in range(0, len(rewards))])
+        visited_state_actions = set()
+        # TODO(Irven) discounts calculation can be simplified by inversing order of loop.
         for idx, state in enumerate(states):
             action_index = actions[idx]
-            if (state, action_index) in first_visits:
+            if (state, action_index) not in visited_state_actions and first_visit:
+                self.agent.N_action[state[0], state[1], action_index] += 1
+                n = self.agent.N_action[state[0], state[1], action_index]
+                forward_rewards = np.sum(discounts[:(len(rewards) - idx)] * rewards[idx:])
+                expected_rewards = self.agent.action_function[state[0], state[1], action_index]
+                delta = forward_rewards - expected_rewards
+                self.agent.action_function[state[0], state[1], action_index] += ((1 / n) * delta)
+                visited_state_actions.add(state)
+            elif not first_visit:
+                self.agent.N[state[0], state[1]] += 1
+                n = self.agent.N[state[0], state[1]]
+                forward_rewards = np.sum(discounts[:(len(rewards) - idx)] * rewards[idx:])
+                expected_rewards = self.agent.action_function[state[0], state[1], action_index]
+                delta = forward_rewards - expected_rewards
+                self.agent.action_function[state[0], state[1], action_index] += ((1 / n) * delta)
+                visited_state_actions.add((state, action_index))
+            elif (state, action_index) in visited_state_actions and first_visit:
                 continue
-            r = np.sum(rewards[idx:])
-            if (state, action_index) in self.agent.Returns.keys():
-                self.agent.Returns[(state, action_index)].append(r)
-            else:
-                self.agent.Returns[(state, action_index)] = [r]
-            self.agent.action_function[state[0], state[1], action_index] = \
-                np.mean(self.agent.Returns[(state, action_index)])
-            first_visits.append((state, action_index))
-        # Update the policy. In Monte Carlo Control, this is greedy behavior with respect to the action function
-        self.agent.policy = self.agent.action_function.copy()
 
-    def monte_carlo_evaluation(self, epsilon=0.1, first_visit=True):
+        # We could update the policy, than we perform on-policy MC control.
+        # if we do not update the policy we can do off-policy learning.
+        # self.agent.policy = self.agent.action_function.copy()
+
+    def monte_carlo_evaluation(self, epsilon=0.1, gamma=0.9, first_visit=True):
         """
         Find the value function of states using MC evaluation
         :param epsilon: exploration rate
+        :param gamma: discount factor of future rewards 
         :param first_visit: Boolean, count only from first occurence of state
         :return:
         """
@@ -181,12 +196,13 @@ class Reinforce(object):
         self.env.state = state
         states, actions, rewards = self.play_episode(state, epsilon=epsilon)
 
+        discounts =  np.array([pow(gamma,i) for i in range(0, len(rewards))])
         visited_states = set()
         for idx, state in enumerate(states):
             if state not in visited_states and first_visit:
                 self.agent.N[state[0], state[1]] += 1
                 n = self.agent.N[state[0], state[1]]
-                forward_rewards = np.sum(rewards[idx:])
+                forward_rewards = np.sum(discounts[:(len(rewards) - idx)] * rewards[idx:])
                 expected_rewards = self.agent.value_function[state[0], state[1]]
                 delta = forward_rewards - expected_rewards
                 self.agent.value_function[state[0], state[1]] += ((1 / n) * delta)
@@ -194,7 +210,7 @@ class Reinforce(object):
             elif not first_visit:
                 self.agent.N[state[0], state[1]] += 1
                 n = self.agent.N[state[0], state[1]]
-                forward_rewards = np.sum(rewards[idx:])
+                forward_rewards = np.sum(discounts[:(len(rewards) - idx)] * rewards[idx:])
                 expected_rewards = self.agent.value_function[state[0], state[1]]
                 delta = forward_rewards - expected_rewards
                 self.agent.value_function[state[0], state[1]] += ((1 / n) * delta)

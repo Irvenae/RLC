@@ -14,9 +14,10 @@ class Piece(object):
         self.init_actionspace()
         self.value_function = np.zeros(shape=(8, 8))
         self.value_function_prev = self.value_function.copy()
-        self.N = np.zeros(shape=(8, 8))
-        self.E = np.zeros(shape=(8, 8))
-        self.Returns = {}
+        self.N = np.zeros(shape=(8, 8)) # used in MC prediction
+        self.E = np.zeros(shape=(8, 8)) # used in TD prediction
+        
+        self.N_action = np.zeros(shape=(8, 8, len(self.action_space))) # used in MC control, importance sampling
         self.action_function = np.zeros(shape=(8, 8, len(self.action_space)))
         self.policy = np.zeros(shape=self.action_function.shape)
         self.policy_prev = self.policy.copy()
