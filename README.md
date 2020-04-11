@@ -1,8 +1,7 @@
 
 # Reinforcement Learning Chess
-#### Arjan Groen
 
-
+based on the RLC implementation of Arjan Groen: https://github.com/arjangroen/RLC
 
 RLC works in three chess environments:
 
@@ -25,9 +24,9 @@ RLC works in three chess environments:
 
 # Installation
 ```bash
-pip install git+https://github.com/arjangroen/RLC.git
+pipenv install  
 ```
-    
+
 # Usage
     
 #### 1. Move Chess | Policy Iteration
@@ -50,11 +49,12 @@ r.policy_iteration(k=1,gamma=1,synchronous=True)
 from RLC.move_chess.environment import Board
 from RLC.move_chess.agent import Piece
 from RLC.move_chess.learn import Reinforce
+from functools import partial
 
 p = Piece(piece='king')
 env = Board()
 r = Reinforce(p,env)
-r.q_learning(n_episodes=1000,alpha=0.2,gamma=0.9)
+r.glie_eps_greedy(partial(r.q_learning, alpha = 0.2, gamma = 0.2), n_episodes = 1000)
 r.visualize_policy()
 r.agent.action_function.max(axis=2).round().astype(int)
 ```
@@ -104,7 +104,7 @@ pgn = R.learn(iters=1000)
 
 ```
 
-# Kaggle kernels
+# Kaggle kernels with original RLC from arjan groen
 https://www.kaggle.com/arjanso/reinforcement-learning-chess-1-policy-iteration  
 https://www.kaggle.com/arjanso/reinforcement-learning-chess-2-model-free-methods  
 https://www.kaggle.com/arjanso/reinforcement-learning-chess-3-q-networks  
