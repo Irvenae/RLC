@@ -174,7 +174,7 @@ class Reinforce(object):
             if action_index != np.argmax(target_policy[state[0], state[1], :]):
                 break
             W = W * 1./ (self.agent.policy[state[0], state[1], action_index] + 0.001)
-            
+
     def monte_carlo_learning(self, epsilon=0.1, gamma = 0.9, first_visit=True):
         """
         Learn move chess through monte carlo control
@@ -310,6 +310,30 @@ class Reinforce(object):
 
             if count_steps > max_steps:
                 episode_end = True
+
+    def evaluate_state_no_policy(self, state, gamma=0.9, synchronous=True):
+        """
+        Calculates the value of a state based on the successor states and the immediate rewards.
+        Because there is no policy applied the action that results in the maximal state is chosen.
+        Args:
+            state: tuple of 2 integers 0-7 representing the state
+            gamma: float, discount factor
+            synchronous: Boolean
+
+        Returns: The expected value of the state. 
+
+        """
+        state_values = []
+        for i in range(len(self.agent.action_space)): 
+            self.env.state = state  # reset state to the one being evaluated
+            reward, episode_end = self.env.step(self.agent.action_space[i])
+            if synchronous:
+                successor_state_value = self.agent.value_function_prev[self.env.state]
+            else:
+                successor_state_value = self.agent.value_function[self.env.state]
+            state_values.append(
+                    reward + gamma * successor_state_value)  # rewards and discounted successor state value
+        return np.max(state_values)
 
     def evaluate_state(self, state, gamma=0.9, synchronous=True):
         """
