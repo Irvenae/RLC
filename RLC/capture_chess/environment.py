@@ -117,6 +117,7 @@ class Board(object):
         Returns: np.ndarray with shape (64,64)
         """
         self.action_space = np.zeros(shape=(64, 64))
+        # use chess legal moves generator to generate legal actions based on current state of the board.
         moves = [[x.from_square, x.to_square] for x in self.board.generate_legal_moves()]
         for move in moves:
             self.action_space[move[0], move[1]] = 1

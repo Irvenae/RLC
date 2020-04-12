@@ -3,10 +3,15 @@ from RLC.capture_chess.environment import Board
 import numpy as np
 from chess.pgn import Game
 import pandas as pd
-
+import matplotlib.pyplot as plt
 
 class Q_learning(object):
-
+    """
+    Apply Q learning using a feeding and learning network with experience replay. 
+    With subsequent games a memory is kept. This memory is then used to sample.
+    In each step we update the learning network using the samples and after a
+    number of steps we update the feeding network with the learning network.
+    """
     def __init__(self, agent, env, memsize=1000):
         """
         Reinforce object to learn capture chess
@@ -20,7 +25,6 @@ class Q_learning(object):
         self.memory = []
         self.memsize = memsize
         self.reward_trace = []
-        self.memory = []
         self.sampling_probs = []
 
     def learn(self, iters=100, c=10):
@@ -30,7 +34,7 @@ class Q_learning(object):
             iters: int
                 amount of games to train
             c: int
-                update the network every c games
+                update the feeding network every c games
 
         Returns: pgn (str)
             pgn string describing final game
@@ -47,6 +51,7 @@ class Q_learning(object):
         pgn = Game.from_board(self.env.board)
         reward_smooth = pd.DataFrame(self.reward_trace)
         reward_smooth.rolling(window=10, min_periods=0).mean().plot()
+        plt.show()
 
         return pgn
 
@@ -83,6 +88,8 @@ class Q_learning(object):
                 action_values = np.reshape(np.squeeze(action_values), (64, 64))
                 action_space = self.env.project_legal_moves()  # The environment determines which moves are legal
                 action_values = np.multiply(action_values, action_space)
+                # get position with maximal index from 64 x 64 matrix.
+                # Store row index in move_from and column index in move_to.
                 move_from = np.argmax(action_values, axis=None) // 64
                 move_to = np.argmax(action_values, axis=None) % 64
                 moves = [x for x in self.env.board.generate_legal_moves() if \
@@ -127,10 +134,11 @@ class Q_learning(object):
 
         """
         minibatch = []
-        memory = self.memory[:-turncount]
-        probs = self.sampling_probs[:-turncount]
+        n_values = min(turncount, self.memsize)
+        memory = self.memory[:-n_values]
+        probs = self.sampling_probs[:-n_values]
         sample_probs = [probs[n] / np.sum(probs) for n in range(len(probs))]
-        indices = np.random.choice(range(len(memory)), min(1028, len(memory)), replace=True, p=sample_probs)
+        indices = np.random.choice(range(len(memory)), len(memory), replace=True, p=sample_probs)
         for i in indices:
             minibatch.append(memory[i])
 
@@ -138,10 +146,10 @@ class Q_learning(object):
 
     def update_agent(self, turncount):
         """
-        Update the agent using experience replay. Set the sampling probs with the td error
+        Update the agent (learning network) using experience replay. Set the sampling probs with the td error
         Args:
             turncount: int
-                Amount of turns played. Only sample the memory of there are sufficient samples
+                Amount of turns played. Only sample the memory if there are sufficient samples
         Returns:
 
         """
@@ -261,7 +269,6 @@ class Reinforce(object):
 
         """
         self.agent.policy_gradient_update(states, actions, rewards, action_spaces)
-
 
 class ActorCritic(object):
 
