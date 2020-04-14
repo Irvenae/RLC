@@ -1,4 +1,5 @@
 import chess
+import chess.svg
 import numpy as np
 
 mapper = {}
@@ -14,6 +15,9 @@ mapper["N"] = 2
 mapper["B"] = 3
 mapper["Q"] = 4
 mapper["K"] = 5
+
+def compose_move(move_from, move_to):
+    return chess.Move(move_from, move_to)
 
 
 class Board(object):
@@ -62,10 +66,36 @@ class Board(object):
             self.layer_board[6, :, :] = 1 / self.board.fullmove_number
         if self.board.can_claim_draw():
             self.layer_board[7, :, :] = 1
+    
+    def state(self):
+        """
+        Get state of board
+        """
+        return self.layer_board
+    
+    def to_pgn(self):
+        return chess.Game.from_board(self.board)
+    
+    def to_svg(self):
+        return chess.svg.board(board = self.board, size=400)
+    
+    def to_file(self, file_loc):
+        """
+        Writes pgn of board to file for easy visualisation.
+        """
+        with open(file_loc, "w") as f:
+            f.write(str(self.board_to_pgn()))
+    
+    def determine_winner(self):
+        """
+        positive is white wins, negative is black wins, zero is remise.
+        """
+        return self.get_material_value()
+
 
     def step(self, action):
         """
-        Run a step
+        Run a step from an Agent.
         Args:
             action: tuple of 2 integers
                 Move from, Move to
@@ -81,9 +111,6 @@ class Board(object):
         self.init_layer_board()
         piece_balance_after = self.get_material_value()
         if self.board.result() == "*":
-            opponent_move = self.get_random_action()
-            self.board.push(opponent_move)
-            self.init_layer_board()
             capture_reward = piece_balance_after - piece_balance_before
             if self.board.result() == "*":
                 reward = 0 + capture_reward
