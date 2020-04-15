@@ -311,7 +311,7 @@ class QExperienceReplayAgent(Agent):
         if self.learn:
             self.game_count += 1
             self.feeding_count += 1
-        if self.feeding_count % self.c_feeding == 0 and self.game_count != 0:
+        if self.feeding_count % self.c_feeding == 0 and self.feeding_count != 0:
             print("updated feeding network")
             self.fix_model()
             self.feeding_count = 0
