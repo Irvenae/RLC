@@ -28,7 +28,7 @@ def play_move(env, agent, white_player):
         move = np.random.choice(moves)  # If there are multiple max-moves, pick a random one.
     return move
 
-def play_game(w_agent, b_agent, learn = True, max_steps_agent = 50):
+def play_game(w_agent, b_agent, max_steps_agent = 50):
     """
     Play a game of capture chess
     Args:
@@ -36,8 +36,6 @@ def play_game(w_agent, b_agent, learn = True, max_steps_agent = 50):
                 Agent playing white
         b_agent: Agent
             Agent playing black
-        learn: boolean
-            Let the agent learn
         max_steps_agent: int
             Maximum amount of steps per game for each agent.
 
@@ -67,20 +65,20 @@ def play_game(w_agent, b_agent, learn = True, max_steps_agent = 50):
             turncount_w += 1
             if turncount_w > max_steps_agent:
                 reward = 0
-            if learn:
-                # update with info of white and black
-                w_agent.update_variables(state, new_state, move, reward)
-                w_agent.update(turncount_w)
+            
+            # update with info of white and black
+            w_agent.update_variables(state, new_state, move, reward)
+            w_agent.update(turncount_w)
         else:
             turncount_b += 1
             if turncount_b > max_steps_agent:
                 reward = 0
                 # terminate, too many steps.
                 episode_end = True
-            if learn:
-                # update with info of white and black
-                b_agent.update_variables(state, new_state, move, reward)
-                b_agent.update(turncount_b)
+                
+            # update with info of white and black
+            b_agent.update_variables(state, new_state, move, reward)
+            b_agent.update(turncount_b)
         
         # switch agent
         turn_white = not turn_white

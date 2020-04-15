@@ -121,6 +121,12 @@ class Agent(object):
         Needs to be called before each game.
         """
         raise NotImplementedError()
+
+    def set_learn(self, learn):
+        """
+        Set learning on / off
+        """
+        raise NotImplementedError()
     
     def get_reward_trace(self):
         """
@@ -173,6 +179,12 @@ class RandomAgent(Agent):
     def reset_for_game(self):
         """
         Needs to be called before each game.
+        """
+        pass
+
+    def set_learn(self, learn):
+        """
+        Set learning on / off
         """
         pass
 
@@ -249,31 +261,24 @@ class QExperienceReplayAgent(Agent):
         super().__init__(gamma, lr, verbose)
         self.network = network
         self.feeding_count = 0
-        self.game_count = 0
+        self.game_count = 0 # only learning games are counted.
         self.c_feeding = c_feeding
         self.memory = []
         self.memsize = memsize
         self.sampling_probs = []
         self.reward_trace = []
+        self.learn = True
 
         self.init_network() # set learning model
         self.fix_model() # set feeding model
-
-        # determine default epsilon function
-        def default_epsilon_func(k):
-            c = 0.5 
-            min_epsilon = 0.05
-            if k == 0:
-                epsilon = 1
-            else:
-                epsilon = max(c / k, min_epsilon)
-            return epsilon
-
-        self.set_epsilon_function(default_epsilon_func)
+        self.set_default_epsilon_function()
 
     #################################
     #       External functions      #
     #################################
+
+    def set_default_epsilon_function(self):
+        self.set_epsilon_function(self.default_epsilon_func)
 
     def set_epsilon_function(self, func):
         """
@@ -288,6 +293,12 @@ class QExperienceReplayAgent(Agent):
         Get epsilon of current game.
         """
         return self.epsilon_func(self.game_count)
+    
+    def set_learn(self, learn):
+        """
+        Set learning on / off
+        """
+        self.learn = learn
 
     def reset_for_game(self):
         """
@@ -297,21 +308,23 @@ class QExperienceReplayAgent(Agent):
         the reward trace will be reset.
         """
         self.reward_trace = []
-        self.game_count += 1
-        self.feeding_count += 1
-        if self.feeding_count % self.c_feeding == 0:
+        if self.learn:
+            self.game_count += 1
+            self.feeding_count += 1
+        if self.feeding_count % self.c_feeding == 0 and self.game_count != 0:
             print("updated feeding network")
             self.fix_model()
             self.feeding_count = 0
     
     def update(self, turncount):
         """
-        Update the agent (learning network) using experience replay. Set the sampling probs with the td error
+        Only does something when learning.
+        Update the agent (learning network) using experience replay. Set the sampling probs with the td error.
         Args:
             turncount: int
                 Amount of turns played. Only sample the memory if there are sufficient samples
         """
-        if turncount < len(self.memory):
+        if self.learn and turncount < len(self.memory):
             minibatch, indices = self.sample_memory(turncount)
             td_errors = self.update_model(minibatch)
             for n, i in enumerate(indices):
@@ -319,7 +332,8 @@ class QExperienceReplayAgent(Agent):
 
     def update_variables(self, state, new_state, move, reward):
         """
-        Update the memory / sampling probs and reward trace of the agent.
+        Update reward trace of the agent.
+        Update the memory / sampling probs when learning.
         Args:
            state: 
                 previous state board
@@ -330,12 +344,13 @@ class QExperienceReplayAgent(Agent):
             reward:
                 reward of the move
         """
-        if len(self.memory) > self.memsize:
-            self.memory.pop(0)
-            self.sampling_probs.pop(0)
-        
-        self.memory.append([state, (move.from_square, move.to_square), reward, new_state])
-        self.sampling_probs.append(1)
+        if self.learn:
+            if len(self.memory) > self.memsize:
+                self.memory.pop(0)
+                self.sampling_probs.pop(0)
+            
+            self.memory.append([state, (move.from_square, move.to_square), reward, new_state])
+            self.sampling_probs.append(1)
 
         self.reward_trace.append(reward)
 
@@ -400,6 +415,17 @@ class QExperienceReplayAgent(Agent):
         self.feeding_model = clone_model(self.model)
         self.feeding_model.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
         self.feeding_model.set_weights(self.model.get_weights())
+
+    # determine default epsilon function
+    @staticmethod
+    def default_epsilon_func(k):
+        c = 0.5 
+        min_epsilon = 0.05
+        if k == 0:
+            epsilon = 1
+        else:
+            epsilon = max(c / k, min_epsilon)
+        return epsilon
 
     def get_action_values(self, state):
         """
