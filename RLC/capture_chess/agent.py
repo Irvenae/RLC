@@ -385,9 +385,9 @@ class QExperienceReplayAgent(Agent):
 
         """
         if self.network == 'linear':
-            self.model = self.init_linear_network(self.lr)
+            self.model = init_linear_network(self.lr)
         elif self.network == 'conv':
-            self.model = self.init_conv_network(self.lr)
+            self.model = init_conv_network(self.lr)
         else:
             raise NotImplementedError()
     
