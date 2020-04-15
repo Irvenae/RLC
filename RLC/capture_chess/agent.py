@@ -152,12 +152,14 @@ class Agent(object):
         """
         raise NotImplementedError()
 
-    def next_move(self, env):
+    def next_move(self, env, white_player):
         """
         Determine next move
         Args:
             env: Board
                 environment of board.
+            white_player: boolean
+                Is the current player white?
         Returns:
             move (move.from_square, move.to_square)
         """
@@ -205,12 +207,14 @@ class RandomAgent(Agent):
         """
         pass
 
-    def next_move(self, env):
+    def next_move(self, env, white_player):
         """
         Determine next move
         Args:
             env: Board
                 environment of board.
+            white_player: boolean
+                Is the current player white?
         Returns:
             move (move.from_square, move.to_square)
         """
@@ -335,12 +339,14 @@ class QExperienceReplayAgent(Agent):
 
         self.reward_trace.append(reward)
 
-    def next_move(self, env):
+    def next_move(self, env, white_player):
         """
         Determine next move
         Args:
             env: Board
                 environment of board.
+            white_player: boolean
+                Is the current player white?
         Returns:
             move (move.from_square, move.to_square)
         """
@@ -357,10 +363,14 @@ class QExperienceReplayAgent(Agent):
             action_values = self.get_action_values(np.expand_dims(state, axis=0))
             action_values = np.reshape(np.squeeze(action_values), (64, 64))
             action_values = np.multiply(action_values, action_space)
-            # get position with maximal index from 64 x 64 matrix.
+            # get position with maximal / minimal index from 64 x 64 matrix.
             # Store row index in move_from and column index in move_to.
-            move_from = np.argmax(action_values, axis=None) // 64
-            move_to = np.argmax(action_values, axis=None) % 64
+            if white_player:
+                move_from = np.argmax(action_values, axis=None) // 64
+                move_to = np.argmax(action_values, axis=None) % 64
+            else:
+               move_from = np.argmin(action_values, axis=None) // 64
+               move_to = np.argmin(action_values, axis=None) % 64 
 
         return compose_move(move_from, move_to)
     

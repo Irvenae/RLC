@@ -1,7 +1,7 @@
 from RLC.capture_chess.environment import Board, compose_move 
 import numpy as np
 
-def play_move(env, agent):
+def play_move(env, agent, white_player):
     """
     Play a single move of capture chess
     Args:
@@ -11,10 +11,12 @@ def play_move(env, agent):
             Current state of the board.
         agent: Agent
             Agent that performs move and needs to be updated.
+        white_player: boolean
+                Is the current player white?
 
     Returns: board environment.
     """
-    move = agent.next_move(env)
+    move = agent.next_move(env, white_player)
     # check if move is valid.
     moves = [x for x in env.board.generate_legal_moves() if \
                 x.from_square == move.from_square and x.to_square == move.to_square]
@@ -54,9 +56,9 @@ def play_game(w_agent, b_agent, learn = True, max_steps_agent = 50):
     while not episode_end:
         state = env.state()
         if (turn_white):
-            move = play_move(env, w_agent)
+            move = play_move(env, w_agent, True)
         else:
-            move = play_move(env, b_agent)
+            move = play_move(env, b_agent, False)
 
         episode_end, reward = env.step(move)
         new_state = env.state()
