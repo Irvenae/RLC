@@ -160,6 +160,19 @@ class Board(object):
         minor = 3 * np.sum(self.layer_board[2:4, :, :])
         queen = 9 * np.sum(self.layer_board[4, :, :])
         return pawns + rooks + minor + queen
+    
+    def validate_move(self, move):
+        """
+        Checks if the move is valid, if not will return a random move.
+        """
+        
+        moves = [x for x in self.board.generate_legal_moves() if \
+                    x.from_square == move.from_square and x.to_square == move.to_square]
+        if len(moves) == 0:  # If all legal moves have negative action value, explore.
+            move = self.get_random_action()
+        else:
+            move = np.random.choice(moves)  # If there are multiple valid moves, pick a random one.
+        return move
 
     def reset(self):
         """
