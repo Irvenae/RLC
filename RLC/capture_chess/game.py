@@ -81,5 +81,7 @@ def play_game(w_agent, b_agent, max_steps_agent = 50):
         reward_other = reward
         move_other = move
 
+    w_agent.update_after_game()
+    b_agent.update_after_game()
     return env
   

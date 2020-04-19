@@ -149,7 +149,12 @@ class Agent(object):
                 reward of the other agent move
         """
         raise NotImplementedError()
-
+    
+    def update_after_game(self):
+        """
+        Called after game.
+        """
+        raise NotImplementedError()
 
 class RandomAgent(Agent):
     """
@@ -201,6 +206,12 @@ class RandomAgent(Agent):
         """
         pass
 
+    def update_after_game(self):
+        """
+        Called after game.
+        """
+        pass
+
 
 class QExperienceReplayAgent(Agent):
     """
@@ -245,6 +256,7 @@ class QExperienceReplayAgent(Agent):
         self.game_count = 0 # only learning games are counted.
         self.memory = []
         self.sampling_probs = []
+        self.reward_trace = []
         
         self.set_learn(True)
         self.init_network() # set learning model
@@ -284,6 +296,7 @@ class QExperienceReplayAgent(Agent):
         Each reset will be seen as a new game start.
         The feeding network will be updated if necessary.
         """
+        self.reward_trace = []
         if self.learn:
             self.game_count += 1
             self.feeding_count += 1
@@ -348,6 +361,7 @@ class QExperienceReplayAgent(Agent):
                 reward of the other agent move
         """
         if self.learn:
+            self.reward_trace.append(reward + reward_other)
             # update memory for experienced replay 
             if len(self.memory) > self.memsize:
                 self.memory.pop(0)
@@ -367,6 +381,22 @@ class QExperienceReplayAgent(Agent):
                     tf.summary.scalar('mean time difference error', data=np.mean(np.abs(td_errors)), step=self.writer_step)
                     self.writer.flush()
                     self.writer_step += 1
+
+    def update_after_game(self):
+        """
+        Called after game.
+        """
+        if self.learn:
+            # calculate cumulative reward
+            discounts =  np.array([pow(self.gamma,i) for i in range(0, len(self.reward_trace))])
+            cumulative_reward = np.sum(discounts * self.reward_trace)
+            if (self.writer):
+                with self.writer.as_default():
+                    tf.summary.scalar('cumulative reward scalar', cumulative_reward, step=self.game_count)
+                    tf.summary.histogram('cumulative reward histogram', cumulative_reward, step=self.game_count)
+                    tf.summary.scalar('cumulative reward length', len(self.reward_trace), step=self.game_count) 
+                    self.writer.flush()
+    
 
     #################################
     #       Internal functions      #
