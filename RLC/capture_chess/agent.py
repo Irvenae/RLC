@@ -219,6 +219,8 @@ class QExperienceReplayAgent(Agent):
     With subsequent games a memory is kept. This memory is then used to sample.
     In each step we update the learning network using the samples and after a
     number of steps we update the feeding network with the learning network.
+
+    The policy implied by Q-Learning is deterministic. This means that Q-Learning can’t learn stochastic policies (which is how we see the random steps).
     """
     
     def __init__(self, network = "conv", c_feeding = 20, memsize = 1000, gamma = 0.5, lr = 0.01, verbose = 0, log_dir = None):
@@ -226,7 +228,6 @@ class QExperienceReplayAgent(Agent):
         Args:
             network: string
                 Network to use
-            eps_func:
             c_feeding: int
                 update feeding network after c_feeding updates.
             memsize: int
@@ -251,6 +252,7 @@ class QExperienceReplayAgent(Agent):
         if (log_dir):
             self.writer = tf.summary.create_file_writer(log_dir)
             self.writer_step = 0
+            self.writer_step_start_episode = self.writer_step 
         
         self.feeding_count = 0
         self.game_count = 0 # only learning games are counted.
@@ -341,7 +343,7 @@ class QExperienceReplayAgent(Agent):
 
         return env.validate_move(compose_move(move_from, move_to))
 
-    def update(self, prev_state, state, move, reward, state_other, move_other, reward_other, minibatch_size=128):
+    def update(self, prev_state, state, move, reward, state_other, move_other, reward_other, minibatch_size=256):
         """
         Update the agent (learning network) using experience replay. Set the sampling probs with the td error.
         Args:
@@ -388,14 +390,17 @@ class QExperienceReplayAgent(Agent):
         """
         if self.learn:
             # calculate cumulative reward
-            discounts =  np.array([pow(self.gamma,i) for i in range(0, len(self.reward_trace))])
-            cumulative_reward = np.sum(discounts * self.reward_trace)
+            discounts = np.array([ self.gamma ** i for i in range(0, len(self.reward_trace))])
+            cumulative_rewards = [ np.sum(discounts[:(len(self.reward_trace) - i)] * self.reward_trace[i:]) for i in range(0, len(self.reward_trace))]
             if (self.writer):
                 with self.writer.as_default():
-                    tf.summary.scalar('cumulative reward scalar', cumulative_reward, step=self.game_count)
-                    tf.summary.histogram('cumulative reward histogram', cumulative_reward, step=self.game_count)
-                    tf.summary.scalar('cumulative reward length', len(self.reward_trace), step=self.game_count) 
+                    for i, cumulative_reward in enumerate(cumulative_rewards):
+                        tf.summary.scalar('cumulative reward', cumulative_reward, step=self.writer_step_start_episode + i )
+                    tf.summary.scalar('mean reward episode', np.mean(self.reward_trace), step=self.game_count)
+                    tf.summary.scalar('length episode', len(self.reward_trace), step=self.game_count)
                     self.writer.flush()
+
+                self.writer_step_start_episode += len(cumulative_rewards)
     
 
     #################################
