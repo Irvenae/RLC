@@ -44,23 +44,42 @@ def play_game(w_agent, b_agent, max_steps_agent = 50):
     turncount_w = 0
     turncount_b = 0
     turn_white = True
+    prev_state = 0
+    reward_other = 0
+    move_other = None
     while not episode_end:
-        state = env.state()
+        state_before_step = env.state()
         if (turn_white):
-            episode_end, reward = w_agent.make_move(env, True)
+            move = w_agent.determine_move(env, True)
         else:
-            episode_end, reward = b_agent.make_move(env, False)
+            move = b_agent.determine_move(env, False)
+        # make move
+        episode_end, reward = env.step(move)
 
+        state_after_step = env.state()
         if (turn_white):
             turncount_w += 1
+
+            # update black with info of white and black
+            if (turncount_b != 0):
+                # *_other is move of b_agent
+                b_agent.update(prev_state, state_before_step, move_other, reward_other, state_after_step, move, reward)
         else:
             turncount_b += 1
             if turncount_b > max_steps_agent:
                 # terminate, too many steps.
                 episode_end = True
                 
+            # update white with info of white and black
+            if (turncount_w != 0):
+                # *_other is move of w_agent
+                w_agent.update(prev_state, state_before_step, move_other, reward_other, state_after_step, move, reward)
+        
         # switch agent
         turn_white = not turn_white
+        prev_state = state_before_step
+        reward_other = reward
+        move_other = move
 
     return env
   

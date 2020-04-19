@@ -117,19 +117,39 @@ class Agent(object):
         """
         raise NotImplementedError()
 
-    def make_move(self, env, white_player):
+    def determine_move(self, env, white_player):
         """
-        Make next move
+        Determine next move
         Args:
             env: Board
                 environment of board.
             white_player: boolean
                 Is the current player white?
-        Returns:
-             Returns:
-                episode_end, reward
+        Returns: move
         """
         raise NotImplementedError()
+
+    def update(self, prev_state, state, move, reward, state_other, move_other, reward_other, minibatch_size=128):
+        """
+        Update the agent (learning network) using experience replay. Set the sampling probs with the td error.
+        Args:
+           prev_state: 
+                previous state board
+            state:
+                state of board after move
+            move:
+                performed move (move.from_square, move.to_square)
+            reward:
+                reward of the move
+           state_other:
+                state of board after others move 
+            move_other:
+                performed move other agent(move.from_square, move.to_square)
+            reward_other:
+                reward of the other agent move
+        """
+        raise NotImplementedError()
+
 
 class RandomAgent(Agent):
     """
@@ -148,7 +168,7 @@ class RandomAgent(Agent):
         """
         pass
 
-    def make_move(self, env, white_player):
+    def determine_move(self, env, white_player):
         """
         Determine next move
         Args:
@@ -156,11 +176,30 @@ class RandomAgent(Agent):
                 environment of board.
             white_player: boolean
                 Is the current player white?
-        Returns:
-            episode_end, reward
+        Returns: move
         """
-        move = env.get_random_action()
-        return env.step(move)    
+        return env.get_random_action()
+    
+    def update(self, prev_state, state, move, reward, state_other, move_other, reward_other, minibatch_size=128):
+        """
+        Update the agent (learning network) using experience replay. Set the sampling probs with the td error.
+        Args:
+           prev_state: 
+                previous state board
+            state:
+                state of board after move
+            move:
+                performed move (move.from_square, move.to_square)
+            reward:
+                reward of the move
+           state_other:
+                state of board after others move 
+            move_other:
+                performed move other agent(move.from_square, move.to_square)
+            reward_other:
+                reward of the other agent move
+        """
+        pass
 
 
 class QExperienceReplayAgent(Agent):
@@ -171,7 +210,7 @@ class QExperienceReplayAgent(Agent):
     number of steps we update the feeding network with the learning network.
     """
     
-    def __init__(self, network = "conv", c_feeding = 10, memsize = 1000, gamma = 0.5, lr = 0.01, verbose = 0, log_dir = None):
+    def __init__(self, network = "conv", c_feeding = 20, memsize = 1000, gamma = 0.5, lr = 0.01, verbose = 0, log_dir = None):
         """
         Args:
             network: string
@@ -253,7 +292,7 @@ class QExperienceReplayAgent(Agent):
             self.fix_model()
             self.feeding_count = 0
     
-    def make_move(self, env, white_player):
+    def determine_move(self, env, white_player):
         """
         Determine next move
         Args:
@@ -261,8 +300,7 @@ class QExperienceReplayAgent(Agent):
                 environment of board.
             white_player: boolean
                 Is the current player white?
-        Returns:
-            episode_end, reward
+        Returns: move
         """
         eps = self.get_epsilon()
         explore = np.random.uniform(0, 1) < eps  # determine whether to explore
@@ -274,7 +312,6 @@ class QExperienceReplayAgent(Agent):
             move_from = move.from_square
             move_to = move.to_square
         else:
-            
             action_space = env.project_legal_moves()  # The environment determines which moves are legal
 
             action_values = self.get_action_values(np.expand_dims(state, axis=0))
@@ -289,17 +326,48 @@ class QExperienceReplayAgent(Agent):
                move_from = np.argmin(action_values, axis=None) // 64
                move_to = np.argmin(action_values, axis=None) % 64 
 
-        move = env.validate_move(compose_move(move_from, move_to))
-        episode_end, reward = env.step(move)
+        return env.validate_move(compose_move(move_from, move_to))
 
-        new_state = env.state() 
-        
-        if (self.learn):
-            self.update(state, new_state, move, reward)
-        
-        return episode_end, reward 
+    def update(self, prev_state, state, move, reward, state_other, move_other, reward_other, minibatch_size=128):
+        """
+        Update the agent (learning network) using experience replay. Set the sampling probs with the td error.
+        Args:
+           prev_state: 
+                previous state board
+            state:
+                state of board after move
+            move:
+                performed move (move.from_square, move.to_square)
+            reward:
+                reward of the move
+           state_other:
+                state of board after others move 
+            move_other:
+                performed move other agent(move.from_square, move.to_square)
+            reward_other:
+                reward of the other agent move
+        """
+        if self.learn:
+            # update memory for experienced replay 
+            if len(self.memory) > self.memsize:
+                self.memory.pop(0)
+                self.sampling_probs.pop(0)
+            self.memory.append([prev_state, (move.from_square, move.to_square), reward + reward_other, state_other])
+            self.sampling_probs.append(1)
 
-    
+            # update model with prioritized experienced replay
+            minibatch, indices = self.sample_memory(minibatch_size)
+            td_errors = self.update_model(minibatch)
+            for n, i in enumerate(indices):
+                self.sampling_probs[i] = np.abs(td_errors[n])
+            
+            # save abs sum of errors in graph:
+            if (self.writer):
+                with self.writer.as_default():
+                    tf.summary.scalar('mean time difference error', data=np.mean(np.abs(td_errors)), step=self.writer_step)
+                    self.writer.flush()
+                    self.writer_step += 1
+
     #################################
     #       Internal functions      #
     #################################
@@ -351,39 +419,6 @@ class QExperienceReplayAgent(Agent):
         """
         return self.feeding_model.predict(state) + np.random.randn() * 1e-9
 
-    def update(self, state, new_state, move, reward, minibatch_size=128):
-        """
-        Update the agent (learning network) using experience replay. Set the sampling probs with the td error.
-        Args:
-           state: 
-                previous state board
-            new_state:
-                new state of board
-            move:
-                performed move (move.from_square, move.to_square)
-            reward:
-                reward of the move
-        """
-        # update memory for experienced replay 
-        if len(self.memory) > self.memsize:
-            self.memory.pop(0)
-            self.sampling_probs.pop(0)
-        self.memory.append([state, (move.from_square, move.to_square), reward, new_state])
-        self.sampling_probs.append(1)
-
-        # update model with prioritized experienced replay
-        minibatch, indices = self.sample_memory(minibatch_size)
-        td_errors = self.update_model(minibatch)
-        for n, i in enumerate(indices):
-            self.sampling_probs[i] = np.abs(td_errors[n])
-        
-        # save abs sum of errors in graph:
-        if (self.writer):
-            with self.writer.as_default():
-                tf.summary.scalar('mean time difference error', data=np.mean(np.abs(td_errors)), step=self.writer_step)
-                self.writer.flush()
-                self.writer_step += 1
-    
     def sample_memory(self, minibatch_size):
         """
         Get a sample from memory for experience replay
@@ -407,7 +442,8 @@ class QExperienceReplayAgent(Agent):
 
     def update_model(self, minibatch):
         """
-        Update the Q-network using samples from the minibatch
+        Update the Q-network using samples from the minibatch. Does not take into account the other 
+        players move.
         Args:
             minibatch: list
                 The minibatch contains the states, moves, rewards and new states.
