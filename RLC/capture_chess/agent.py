@@ -28,11 +28,14 @@ tfback._get_available_gpus = _get_available_gpus
 
 
 
-def policy_gradient_loss(Returns):
+def policy_gradient_loss(cumulative_rewards):
+    """
+    Policy gradient loss is defined as the sum, over timesteps, of action
+    log-probability (same as categorical_crossentropy) times the cumulative rewards from that timestep onward.
+    """
     def modified_crossentropy(action, action_probs):
-        cost = (K.categorical_crossentropy(action, action_probs, from_logits=False, axis=1) * Returns)
-        return K.mean(cost)
-
+        cost = (K.categorical_crossentropy(action, action_probs, from_logits=False, axis=1) * cumulative_rewards)
+        return K.mean(cost) # TODO(Irven): try with sum.
     return modified_crossentropy
 
 
@@ -43,7 +46,7 @@ def policy_gradient_loss(Returns):
 def init_linear_network(lr):
     """
     Initialize a linear neural network
-    Returns:
+    Returns: model
 
     """
     optimizer = SGD(lr=lr, momentum=0.0, decay=0.0, nesterov=False)
@@ -57,7 +60,7 @@ def init_linear_network(lr):
 def init_conv_network(lr):
     """
     Initialize a convolutional neural network
-    Returns:
+    Returns: model
 
     """
     optimizer = SGD(lr=lr, momentum=0.0, decay=0.0, nesterov=False)
@@ -75,12 +78,12 @@ def init_conv_network(lr):
 def init_conv_pg(lr):
     """
     Convnet net for policy gradients
-    Returns:
+    Returns: model
 
     """
     optimizer = SGD(lr=lr, momentum=0.0, decay=0.0, nesterov=False)
     input_layer = Input(shape=(8, 8, 8), name='board_layer')
-    R = Input(shape=(1,), name='Rewards')
+    cumulative_rewards = Input(shape=(1,), name='cumulative_rewards')
     legal_moves = Input(shape=(4096,), name='legal_move_mask')
     inter_layer_1 = Conv2D(1, (1, 1), data_format="channels_first")(input_layer)  # 1,8,8
     inter_layer_2 = Conv2D(1, (1, 1), data_format="channels_first")(input_layer)  # 1,8,8
@@ -90,8 +93,8 @@ def init_conv_pg(lr):
     output_layer = Reshape(target_shape=(4096,))(output_dot_layer)
     softmax_layer = Activation('softmax')(output_layer)
     legal_softmax_layer = Multiply()([legal_moves, softmax_layer])  # Select legal moves
-    model = Model(inputs=[input_layer, R, legal_moves], outputs=[legal_softmax_layer])
-    model.compile(optimizer=optimizer, loss=policy_gradient_loss(R))
+    model = Model(inputs=[input_layer, cumulative_rewards, legal_moves], outputs=[legal_softmax_layer])
+    model.compile(optimizer=optimizer, loss=policy_gradient_loss(cumulative_rewards))
     return model
 
 
@@ -523,3 +526,186 @@ class QExperienceReplayAgent(Agent):
         self.model.fit(x=np.stack(states, axis=0), y=q_state, epochs=1, verbose=self.verbose)
 
         return td_errors
+
+
+class ReinforceAgent(Agent):
+    """
+    REINFORCE: REward Increment = Nonnegative Factor × Offset Reinforcement × Characteristic Eligibility
+    REINFORCE is the fundamental policy gradient algorithm.
+    """
+    def __init__(self, memsize = 1000, gamma = 0.5, lr = 0.3, verbose = 0, log_dir = None):
+        """
+        Args:
+            memsize: int
+                total states to hold in memory for experience replay.
+            gamma: float
+                Temporal discount factor
+            lr: float
+                Learning rate, ideally around 0.1
+            verbose: int
+                verbose output: 0 or 1.
+            log_dir: 
+                directory for logging
+        """
+        super().__init__()
+        self.memsize = memsize
+        self.gamma = gamma
+        self.lr = lr
+        self.verbose = verbose
+        self.writer = None
+        if (log_dir):
+            self.writer = tf.summary.create_file_writer(log_dir)
+            self.writer_step = 0
+            self.writer_step_start_episode = 0
+        
+        self.feeding_count = 0
+        self.game_count = 0 # only learning games are counted.
+        self.memory_mean_rewards = []
+        self.episode_data = []
+        
+        self.set_learn(True)
+        self.model = init_conv_pg(self.lr)
+    
+    class EpisodeData():
+        def __init__(self, state, move, reward, action_space):
+            self.state = state
+            self.move = move
+            self.reward = reward
+            self.action_space = action_space
+
+    #################################
+    #       External functions      #
+    #################################
+
+    def set_learn(self, learn):
+        """
+        Set learning on / off
+        """
+        self.learn = learn
+
+    def reset_for_game(self):
+        """
+        Needs to be called before each game.
+        Each reset will be seen as a new game start.
+        The feeding network will be updated if necessary.
+        """
+        self.episode_data = []
+        if self.learn:
+            self.game_count += 1
+    
+    def determine_move(self, env, white_player):
+        """
+        Determine next move
+        Args:
+            env: Board
+                environment of board.
+            white_player: boolean
+                Is the current player white?
+        Returns: move
+        """
+        state = env.state()
+        if np.array_equal(state, 0):
+            raise Exception("Game has already ended!")
+       
+        action_space = env.project_legal_moves()  # The environment determines which moves are legal
+        self.temp_action_space = action_space # hack to get action space in update function.
+        action_probs = self.model.predict([np.expand_dims(state, axis=0),
+                                                     np.zeros((1, 1)),
+                                                     action_space.reshape(1, 4096)])
+        action_probs = action_probs / action_probs.sum()
+        # if not white_player:
+
+        # get position from 64 x 64 matrix.
+        # Store row index in move_from and column index in move_to.
+        move = np.random.choice(range(4096), p=np.squeeze(action_probs))
+        move_from = move // 64
+        move_to = move % 64
+
+        if (self.learn and self.writer):
+            with self.writer.as_default():
+                tf.summary.scalar('probability max move', np.max(action_probs), step=self.writer_step )
+            self.writer_step += 1
+
+        return env.validate_move(compose_move(move_from, move_to))
+
+    def update(self, prev_state, state, move, reward, state_other, move_other, reward_other, minibatch_size=256):
+        """
+        Update the agent (learning network) using experience replay. Set the sampling probs with the td error.
+        Args:
+           prev_state: 
+                previous state board
+            state:
+                state of board after move
+            move:
+                performed move (move.from_square, move.to_square)
+            reward:
+                reward of the move
+           state_other:
+                state of board after others move 
+            move_other:
+                performed move other agent(move.from_square, move.to_square)
+            reward_other:
+                reward of the other agent move
+        """
+        if self.learn:
+            # add data that will be used at end of episode
+            data = self.EpisodeData(prev_state, move, reward + reward_other, self.temp_action_space)
+            self.episode_data.append(data)
+
+    def update_after_game(self):
+        """
+        Called after game.
+        """
+        if self.learn:
+            cumulative_rewards = self.update_model()
+            
+            if (self.writer):
+                with self.writer.as_default():
+                    for i, cumulative_reward in enumerate(cumulative_rewards):
+                        tf.summary.scalar('cumulative reward', cumulative_reward, step=self.writer_step_start_episode + i )
+                    tf.summary.scalar('mean reward episode', np.mean(cumulative_rewards), step=self.game_count)
+                    tf.summary.scalar('length episode', len(cumulative_rewards), step=self.game_count)
+                    self.writer.flush()
+
+                self.writer_step_start_episode += len(cumulative_rewards)
+
+
+    #################################
+    #       Internal functions      #
+    #################################
+
+    def update_model(self):
+        """
+        Update model with Monte Carlo Policy Gradient algorithm needs data of entire episode.
+        
+        Returns:
+            cumulative_rewards in episode
+        """
+         
+        n_steps = len(self.episode_data)
+        discounts = np.array([ self.gamma ** i for i in range(0, len(self.episode_data))])
+        cumulative_rewards = [ np.sum(discounts[:(n_steps - i)] * self.episode_data[i].reward) for i in range(0, n_steps)]
+        states = [ self.episode_data[i].state for i in range(0, n_steps)]
+        action_spaces = [ self.episode_data[i].action_space.reshape(1, 4096) for i in range(0, n_steps)]
+        targets = np.zeros((n_steps, 64, 64))
+        for t in range(n_steps):
+            action = self.episode_data[t].move
+            targets[t, action.from_square, action.to_square] = 1
+
+        mean_cumulative_reward = np.mean(cumulative_rewards)
+        if len(self.memory_mean_rewards) > self.memsize:
+                self.memory_mean_rewards.pop(0)
+        self.memory_mean_rewards.append(mean_cumulative_reward)
+
+        train_cumulative_rewards = np.stack(cumulative_rewards, axis=0) - np.mean(self.memory_mean_rewards)
+        # ideally this can be optimized by using the advantage function = q(s,a) - v(s)
+                
+        targets = targets.reshape((n_steps, 4096))
+        self.model.fit(x=[np.stack(states, axis=0),
+                          train_cumulative_rewards,
+                          np.concatenate(action_spaces, axis=0)
+                          ],
+                       y=[np.stack(targets, axis=0)],
+                       verbose=self.verbose
+                       )
+        return cumulative_rewards
