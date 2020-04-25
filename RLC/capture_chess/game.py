@@ -1,6 +1,35 @@
 from RLC.capture_chess.environment import Board, compose_move 
 import numpy as np
 
+def play_alternate_role(player1, player2, nr_games_each_role, print_results=True):
+    player1_wins = 0
+    player2_wins = 0
+    remise = 0
+    for i in range(nr_games_each_role):
+        if (i % 10 == 0 and print_results):
+            print(f'game {i} of {nr_games_each_role}')
+        env = play_game(player1, player2)
+        result = env.determine_winner()
+        if result > 0:
+            player1_wins += 1
+        elif result < 0:
+            player2_wins += 1
+        else:
+            remise += 1
+        env = play_game(player2, player1)
+        result = env.determine_winner()
+        if result > 0:
+            player2_wins += 1
+        elif result < 0:
+            player1_wins += 1
+        else:
+            remise += 1
+    if print_results:
+        print("player 1 wins: " + str(player1_wins))
+        print("player 2 wins: " + str(player2_wins))
+        print("remises: "+ str(remise))
+    return player1_wins, player2_wins, remise
+    
 def play_fixed_role(white_player, black_player, nr_games, print_results=True):
     white_wins = 0
     black_wins = 0
