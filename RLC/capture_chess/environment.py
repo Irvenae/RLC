@@ -1,5 +1,6 @@
 import chess
 import chess.svg
+import chess.pgn
 import numpy as np
 
 mapper = {}
@@ -74,7 +75,7 @@ class Board(object):
         return self.layer_board
     
     def to_pgn(self):
-        return chess.Game.from_board(self.board)
+        return chess.pgn.Game.from_board(self.board)
     
     def to_svg(self):
         return chess.svg.board(board = self.board, size=400)
@@ -84,7 +85,7 @@ class Board(object):
         Writes pgn of board to file for easy visualisation.
         """
         with open(file_loc, "w") as f:
-            f.write(str(self.board_to_pgn()))
+            f.write(str(self.to_pgn()))
     
     def determine_winner(self):
         """
