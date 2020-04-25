@@ -35,7 +35,7 @@ def policy_gradient_loss(cumulative_rewards):
     """
     def modified_crossentropy(action, action_probs):
         cost = (K.categorical_crossentropy(action, action_probs, from_logits=False, axis=1) * cumulative_rewards)
-        return K.mean(cost) # TODO(Irven): try with sum.
+        return K.mean(cost)
     return modified_crossentropy
 
 
@@ -335,14 +335,10 @@ class QExperienceReplayAgent(Agent):
             action_values = self.get_action_values(np.expand_dims(state, axis=0))
             action_values = np.reshape(np.squeeze(action_values), (64, 64))
             action_values = np.multiply(action_values, action_space)
-            # get position with maximal / minimal index from 64 x 64 matrix.
+            # get position with maximal index from 64 x 64 matrix.
             # Store row index in move_from and column index in move_to.
-            if white_player:
-                move_from = np.argmax(action_values, axis=None) // 64
-                move_to = np.argmax(action_values, axis=None) % 64
-            else:
-               move_from = np.argmin(action_values, axis=None) // 64
-               move_to = np.argmin(action_values, axis=None) % 64 
+            move_from = np.argmax(action_values, axis=None) // 64
+            move_to = np.argmax(action_values, axis=None) % 64
 
         return env.validate_move(compose_move(move_from, move_to))
 
@@ -630,7 +626,7 @@ class ReinforceAgent(Agent):
 
     def update(self, prev_state, state, move, reward, state_other, move_other, reward_other, minibatch_size=256):
         """
-        Update the agent (learning network) using experience replay. Set the sampling probs with the td error.
+        Store episode data.
         Args:
            prev_state: 
                 previous state board
@@ -647,10 +643,9 @@ class ReinforceAgent(Agent):
             reward_other:
                 reward of the other agent move
         """
-        if self.learn:
-            # add data that will be used at end of episode
-            data = self.EpisodeData(prev_state, move, reward + reward_other, self.temp_action_space)
-            self.episode_data.append(data)
+        # add data that will be used at end of episode
+        data = self.EpisodeData(prev_state, move, reward + reward_other, self.temp_action_space)
+        self.episode_data.append(data)
 
     def update_after_game(self):
         """
@@ -697,8 +692,8 @@ class ReinforceAgent(Agent):
                 self.memory_mean_rewards.pop(0)
         self.memory_mean_rewards.append(mean_cumulative_reward)
 
+        # use mean as a baseline, could be further optimized with state dependent baseline.
         train_cumulative_rewards = np.stack(cumulative_rewards, axis=0) - np.mean(self.memory_mean_rewards)
-        # ideally this can be optimized by using the advantage function = q(s,a) - v(s)
                 
         targets = targets.reshape((n_steps, 4096))
         self.model.fit(x=[np.stack(states, axis=0),

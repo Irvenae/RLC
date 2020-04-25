@@ -1,12 +1,12 @@
 from RLC.capture_chess.environment import Board, compose_move 
 import numpy as np
 
-def play_fixed_role(white_player, black_player, nr_games):
+def play_fixed_role(white_player, black_player, nr_games, print_results=True):
     white_wins = 0
     black_wins = 0
     remise = 0
     for i in range(nr_games):
-        if (i % 10 == 0):
+        if (i % 10 == 0 and print_results):
             print(f'game {i} of {nr_games}')
         env = play_game(white_player, black_player)
         result = env.determine_winner()
@@ -16,9 +16,10 @@ def play_fixed_role(white_player, black_player, nr_games):
             black_wins += 1
         else:
             remise += 1
-    print("white wins: " + str(white_wins))
-    print("black wins: " + str(black_wins))
-    print("remises: "+ str(remise))
+    if print_results:
+        print("white wins: " + str(white_wins))
+        print("black wins: " + str(black_wins))
+        print("remises: "+ str(remise))
     return white_wins, black_wins, remise
 
 def play_game(w_agent, b_agent, max_steps_agent = 50):
@@ -63,7 +64,8 @@ def play_game(w_agent, b_agent, max_steps_agent = 50):
             # update black with info of white and black
             if (turncount_b != 0):
                 # *_other is move of b_agent
-                b_agent.update(prev_state, state_before_step, move_other, reward_other, state_after_step, move, reward)
+                # invert rewards (for agent good means positive reward.)
+                b_agent.update(prev_state, state_before_step, move_other, - reward_other, state_after_step, move, - reward)
         else:
             turncount_b += 1
             if turncount_b > max_steps_agent:
