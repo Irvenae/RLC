@@ -1,8 +1,9 @@
-from keras.models import Model, clone_model
+from keras.models import Model, clone_model, load_model
 from keras.layers import Input, Conv2D, Dense, Reshape, Dot, Activation, Multiply
 from keras.optimizers import SGD
 import numpy as np
 import keras.backend as K
+import dill as pickle
 
 # import own modules
 from RLC.capture_chess.environment import compose_move
@@ -38,6 +39,17 @@ def policy_gradient_loss(cumulative_rewards):
         return K.mean(cost)
     return modified_crossentropy
 
+def clip_probs(original_probs):
+    """
+    Makes sure probabilities are in certain range.
+    Rescale sum probabilities to 1.
+    """
+    min_p = 1e-5
+    max_p = 1 - min_p
+    clipped_probs = np.clip(original_probs, min_p, max_p)
+    clipped_probs = clipped_probs / np.sum(clipped_probs)
+    return clipped_probs
+
 
 #################################
 #       Networks                #
@@ -63,7 +75,7 @@ def init_conv_network(lr):
     Returns: model
 
     """
-    optimizer = SGD(lr=lr, momentum=0.0, decay=0.0, nesterov=False)
+    optimizer = SGD(lr=lr, momentum=0.0, decay=0.0, nesterov=False, clipnorm=1.0)
     input_layer = Input(shape=(8, 8, 8), name='board_layer')
     inter_layer_1 = Conv2D(1, (1, 1), data_format="channels_first")(input_layer)  # 1,8,8
     inter_layer_2 = Conv2D(1, (1, 1), data_format="channels_first")(input_layer)  # 1,8,8
@@ -81,7 +93,7 @@ def init_conv_pg(lr):
     Returns: model
 
     """
-    optimizer = SGD(lr=lr, momentum=0.0, decay=0.0, nesterov=False)
+    optimizer = SGD(lr=lr, momentum=0.0, decay=0.0, nesterov=False, clipnorm=1.0)
     input_layer = Input(shape=(8, 8, 8), name='board_layer')
     cumulative_rewards = Input(shape=(1,), name='cumulative_rewards')
     legal_moves = Input(shape=(4096,), name='legal_move_mask')
@@ -108,6 +120,24 @@ class Agent(object):
     def __init__(self):
         pass
     
+    def load(self, load_loc):
+        """
+        Load the agent state.
+        Args
+            load_loc: String
+                file location to load from without extension
+        """
+        raise NotImplementedError()
+
+    def save(self, save_loc):
+        """
+        Load the agent state.
+        Args
+            save_loc: String
+                file location to save to without extension
+        """
+        raise NotImplementedError()
+
     def reset_for_game(self):
         """
         Needs to be called before each game.
@@ -163,6 +193,23 @@ class RandomAgent(Agent):
     """
     Plays a random move
     """
+    def load(self, load_loc):
+        """
+        Load the agent state.
+        Args
+            load_loc: String
+                file location to load from without extension
+        """
+        pass
+
+    def save(self, save_loc):
+        """
+        Load the agent state.
+        Args
+            save_loc: String
+                file location to save to without extension
+        """
+        pass
 
     def reset_for_game(self):
         """
@@ -267,10 +314,57 @@ class QExperienceReplayAgent(Agent):
         self.init_network() # set learning model
         self.fix_model() # set feeding model
         self.set_default_epsilon_function()
+    
+    class SaveData():
+        # changing this will break save / load of older models !
+        def __init__(self,  network, c_feeding, memsize, gamma, lr, game_count, feeding_count, epsilon_func):
+            self.network = network
+            self.c_feeding = c_feeding 
+            self.memsize = memsize
+            self.gamma = gamma
+            self.lr = lr
+            self.game_count = game_count
+            self.feeding_count = feeding_count
+            self.epsilon_func = epsilon_func
 
     #################################
     #       External functions      #
     #################################
+
+    def load(self, load_loc):
+        """
+        Load the agent state.
+        Args
+            load_loc: String
+                file location to load from without extension
+        """
+        try:
+            self.model = load_model(load_loc + ".h5")
+            self.feeding_model = load_model(load_loc + "_feeding.h5")
+            save_data = pickle.load( open( load_loc + ".pkl", "rb" ) )
+            self.network = save_data.network
+            self.c_feeding = save_data.c_feeding
+            self.memsize = save_data.memsize
+            self.gamma = save_data.gamma
+            self.lr = save_data.lr
+            self.game_count = save_data.game_count
+            self.feeding_count = save_data.feeding_count
+            self.epsilon_func = save_data.epsilon_func
+            return True
+        except:
+            return False
+
+    def save(self, save_loc):
+        """
+        Load the agent state.
+        Args
+            save_loc: String
+                file location to save to without extension
+        """
+        self.model.save(save_loc + ".h5")
+        self.feeding_model.save(save_loc + "_feeding.h5")
+        save_data = self.SaveData(self.network, self.c_feeding, self.memsize, self.gamma, self.lr, self.game_count, self.feeding_count, self.epsilon_func)
+        pickle.dump( save_data, open( save_loc + ".pkl", "wb" ) )
 
     def set_default_epsilon_function(self):
         self.set_epsilon_function(self.default_epsilon_func)
@@ -537,7 +631,7 @@ class ReinforceAgent(Agent):
             gamma: float
                 Temporal discount factor
             lr: float
-                Learning rate, ideally around 0.1
+                Learning rate, ideally
             verbose: int
                 verbose output: 0 or 1.
             log_dir: 
@@ -553,15 +647,24 @@ class ReinforceAgent(Agent):
             self.writer = tf.summary.create_file_writer(log_dir)
             self.writer_step = 0
             self.writer_step_start_episode = 0
+            self.writer_episode = 0
         
-        self.feeding_count = 0
-        self.game_count = 0 # only learning games are counted.
+        self.learn_game_count = 0 # only learning games are counted.
         self.memory_mean_rewards = []
         self.episode_data = []
         
         self.set_learn(True)
         self.model = init_conv_pg(self.lr)
-    
+
+    class SaveData():
+        # changing this will break save / load of older models !
+        def __init__(self, memsize, gamma, lr, learn_game_count, optimizer_weights):
+            self.memsize = memsize
+            self.gamma = gamma
+            self.lr = lr
+            self.learn_game_count = learn_game_count
+            self.optimizer_weights = optimizer_weights
+
     class EpisodeData():
         def __init__(self, state, move, reward, action_space):
             self.state = state
@@ -572,6 +675,39 @@ class ReinforceAgent(Agent):
     #################################
     #       External functions      #
     #################################
+
+    def load(self, load_loc):
+        """
+        Saves the agent state.
+        Args
+            load_loc: String
+                file location to load from without extension
+        """
+        try:
+            self.model.load_weights(load_loc + ".h5")
+            self.model._make_train_function()
+            save_data = pickle.load( open( load_loc + ".pkl", "rb" ) )
+            self.model.optimizer.set_weights(save_data.optimizer_weights)
+            self.memsize = save_data.memsize
+            self.gamma = save_data.gamma
+            self.lr = save_data.lr
+            self.learn_game_count = save_data.learn_game_count
+            return True
+        except:
+            return False
+
+    def save(self, save_loc):
+        """
+        Saves the agent state.
+        Args
+            save_loc: String
+                file location to save to without extension
+        """
+        self.model.save_weights(save_loc + ".h5")
+        symbolic_weights = getattr(self.model.optimizer, 'weights')
+        optimizer_weights = K.batch_get_value(symbolic_weights)
+        save_data = self.SaveData(self.memsize, self.gamma, self.lr, self.learn_game_count, optimizer_weights)
+        pickle.dump( save_data, open( save_loc + ".pkl", "wb" ) )
 
     def set_learn(self, learn):
         """
@@ -587,7 +723,7 @@ class ReinforceAgent(Agent):
         """
         self.episode_data = []
         if self.learn:
-            self.game_count += 1
+            self.learn_game_count += 1
     
     def determine_move(self, env, white_player):
         """
@@ -608,8 +744,7 @@ class ReinforceAgent(Agent):
         action_probs = self.model.predict([np.expand_dims(state, axis=0),
                                                      np.zeros((1, 1)),
                                                      action_space.reshape(1, 4096)])
-        action_probs = action_probs / action_probs.sum()
-        # if not white_player:
+        action_probs = clip_probs(action_probs)
 
         # get position from 64 x 64 matrix.
         # Store row index in move_from and column index in move_to.
@@ -658,11 +793,12 @@ class ReinforceAgent(Agent):
                 with self.writer.as_default():
                     for i, cumulative_reward in enumerate(cumulative_rewards):
                         tf.summary.scalar('cumulative reward', cumulative_reward, step=self.writer_step_start_episode + i )
-                    tf.summary.scalar('mean reward episode', np.mean(cumulative_rewards), step=self.game_count)
-                    tf.summary.scalar('length episode', len(cumulative_rewards), step=self.game_count)
+                    tf.summary.scalar('mean reward episode', np.mean(cumulative_rewards), step=self.writer_episode)
+                    tf.summary.scalar('length episode', len(cumulative_rewards), step=self.writer_episode)
                     self.writer.flush()
 
                 self.writer_step_start_episode += len(cumulative_rewards)
+                self.writer_episode += 1
 
 
     #################################
