@@ -3,7 +3,7 @@ from setuptools import setup
 setup(
     name='RLC',
     version='0.4',
-    packages=['RLC', 'RLC.move_chess', 'RLC.capture_chess', 'RLC.real_chess'],
+    packages=['RLC', 'RLC.move_chess', 'RLC.capture_chess', 'RLC.capture_chess_rllib', 'RLC.real_chess'],
     url='https://github.com/irvenae/RLC',
     license='MIT',
     author='a.groen, irvenae',

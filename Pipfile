@@ -8,15 +8,17 @@ numpy =  "*"
 keras = "*"
 python-chess = "*"
 pandas = "*"
-pprint = "*"
 tensorflow = "*"
 dill = "*"
+ray = {extras = ["rllib"],version = "*"}
+gym = "*"
 
 [dev-packages]
 matplotlib = "*"
 jupyter = "*"
 pylint = "*"
-black = "*"
+black = "==19.10b0"
+autopep8 = "*"
 
 [requires]
 python_version = "3.7"
