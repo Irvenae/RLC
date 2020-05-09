@@ -19,6 +19,7 @@ jupyter = "*"
 pylint = "*"
 black = "==19.10b0"
 autopep8 = "*"
+cairosvg = "*"
 
 [requires]
 python_version = "3.7"

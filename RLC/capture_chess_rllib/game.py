@@ -107,7 +107,7 @@ def play_random_games(n_episodes):
              stop={"episodes_total": n_episodes}, config=config)
 
 
-def load_and_evaluate(dir_checkpoint, n_episodes):
+def load_and_evaluate(dir_checkpoint, n_episodes, video_dir= None):
     """
     Load a previously stored training session and evaluate.
     e.g. dir_checkpoint: "/Users/irvenaelbrecht/ray_results/PolicyGradientTrainer/PolicyGradientTrainer_CaptureChessEnv_0_2020-05-07_08-41-44p2dp1i_z/checkpoint_1/checkpoint-1"
@@ -117,12 +117,16 @@ def load_and_evaluate(dir_checkpoint, n_episodes):
             directory to load from
         n_episodes
             number of episodes to evaluate
+        video_dir
+            directory to save video of episode, currently this can only be done by
+            disabling some of the stats_recorder:
+                - disable checking functionality in before_step(self, action):
+                - self.rewards += reward -> self.rewards += 0 in after_step(self, observation, reward, done, info)
     """
     # register the models that can be used in the config.
     register_models()
     tune.register_trainable("PolicyGradientTrainer", PGTrainer)
-
     parser = create_parser()
     args = dotdict({"run": "PolicyGradientTrainer", "episodes": n_episodes,
-                    "checkpoint": dir_checkpoint, "steps": 0, "no_render": True, "config": {}})
+                    "checkpoint": dir_checkpoint, "steps": 0, "no_render": True, "workers":None, "video_dir": video_dir, "config": {}})
     run(args, parser)

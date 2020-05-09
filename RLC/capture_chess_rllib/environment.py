@@ -7,6 +7,7 @@ from ray.rllib.agents.pg.pg import PGTrainer
 from ray.rllib.agents.pg.pg_tf_policy import PGTFPolicy
 from ray.rllib.policy.policy import Policy
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
+import gym
 from gym.spaces import Box, Dict
 
 mapper = {}
@@ -28,8 +29,9 @@ def compose_move(move_from, move_to):
     return chess.Move(move_from, move_to)
 
 
-class CaptureChessEnv(MultiAgentEnv):
+class CaptureChessEnv(gym.Env, MultiAgentEnv):
     """Two-player environment for capture chess."""
+
     observation_space = Dict({
         "action_mask": Box(np.float32(0), np.float32(1), (4096,), dtype=np.float32),
         # 8 layers for different types and additional info, each has position on 8 x 8 board.
@@ -37,6 +39,10 @@ class CaptureChessEnv(MultiAgentEnv):
     })
     # move_from and move_to action each is position on board.
     action_space = Box(0, 1, (4096,), dtype=np.bool)
+    metadata = {
+        'render.modes': ['rgb_array'],
+        'video.frames_per_second' : 1
+    }
 
     def __init__(self, FEN=None):
         """
@@ -190,7 +196,6 @@ class CaptureChessEnv(MultiAgentEnv):
                 rewards[self.player2] = - reward2
 
             self.prev_reward = reward2
-        print(rewards)
         done = {
             "__all__": check_end(episode_end, self.num_moves)
         }
@@ -248,7 +253,16 @@ class CaptureChessEnv(MultiAgentEnv):
         return move
     
     def render(self, mode='human'):
-        if mode == "human":
-            return self.to_svg()
+        # import cairocffi as cairo
+        if mode == 'rgb_array':
+            import cairosvg
+            tree = cairosvg.parser.Tree(bytestring=self.to_svg())
+            surface = cairosvg.surface.PNGSurface(tree, None, 96)
+            argb = np.frombuffer( surface.cairo.get_data(), dtype=np.uint8 ).reshape( 400, 400, 4 )
+            rgba = np.zeros((400,400,3), dtype=np.uint8)
+            rgba[:,:,0] = argb[:,:,2]
+            rgba[:,:,1] = argb[:,:,1]
+            rgba[:,:,2] = argb[:,:,0]
+            return rgba
         else:
-            raise NotImplementedError()
+            super(CaptureChessEnv, self).render(mode=mode) # just raise an exception
