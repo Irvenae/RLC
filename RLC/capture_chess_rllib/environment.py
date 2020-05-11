@@ -2,6 +2,7 @@ import chess
 import chess.svg
 import chess.pgn
 import numpy as np
+import math
 
 from ray.rllib.agents.pg.pg import PGTrainer
 from ray.rllib.agents.pg.pg_tf_policy import PGTFPolicy
@@ -41,7 +42,7 @@ class CaptureChessEnv(gym.Env, MultiAgentEnv):
     action_space = Box(0, 1, (4096,), dtype=np.bool)
     metadata = {
         'render.modes': ['rgb_array'],
-        'video.frames_per_second' : 1
+        'video.frames_per_second': 1
     }
 
     def __init__(self, FEN=None):
@@ -58,14 +59,6 @@ class CaptureChessEnv(gym.Env, MultiAgentEnv):
         self.player2 = "player2"
 
         self.reset()
-
-    def init_action_space(self):
-        """
-        Initialize the action space
-        Returns:
-
-        """
-        self.action_space = np.zeros(shape=(4096,))
 
     def init_layer_board(self):
         """
@@ -88,6 +81,7 @@ class CaptureChessEnv(gym.Env, MultiAgentEnv):
             self.layer_board[layer, row, col] = sign
         if self.board.turn:
             # Encode move as Nr between 0 and 1.
+            self.num_moves = self.board.fullmove_number
             self.layer_board[6, :, :] = 1 / self.board.fullmove_number
         if self.board.can_claim_draw():
             self.layer_board[7, :, :] = 1
@@ -113,9 +107,9 @@ class CaptureChessEnv(gym.Env, MultiAgentEnv):
 
     def determine_winner(self):
         """
-        positive is white wins, negative is black wins, zero is remise.
+        +1 is white wins, -1 is black wins, zero is remise.
         """
-        return self.get_material_value()
+        return np.sign(self.get_material_value())
 
     def reset(self):
         """
@@ -126,7 +120,6 @@ class CaptureChessEnv(gym.Env, MultiAgentEnv):
         self.num_moves = 0
         self.board = chess.Board(self.FEN) if self.FEN else chess.Board()
         self.init_layer_board()
-        self.init_action_space()
         self.prev_reward = 0
         obs = {
             # player 1 starts.
@@ -135,9 +128,15 @@ class CaptureChessEnv(gym.Env, MultiAgentEnv):
         return obs
 
     def _make_move(self, move_space):
-        possible_actions = np.where(self.action_space == 1)
+        possible_actions = np.where(self.project_legal_moves() == 1)
+        if len(possible_actions) == 0:
+            raise Exception("No possible actions")
+        max_val = move_space[possible_actions].max()
+        if math.isnan(max_val):
+            raise Exception("Model is failing.")
+
         chosen_action = np.random.choice(np.flatnonzero(
-            move_space[possible_actions] == move_space[possible_actions].max()))
+            move_space[possible_actions] == max_val))
         move_idx = possible_actions[0][chosen_action]
         move = compose_move(move_idx % 64, move_idx // 64)
 
@@ -163,10 +162,7 @@ class CaptureChessEnv(gym.Env, MultiAgentEnv):
         Run a step.
         """
         def check_end(episode_end, num_moves):
-            return episode_end or num_moves >= 100 # 50 steps each player.
-
-        # Already increase num moves for correct check_end.
-        self.num_moves += 1
+            return episode_end or num_moves >= 50
 
         if action_dict.get(self.player1) is not None:
             episode_end, reward1 = self._make_move(action_dict[self.player1])
@@ -218,13 +214,13 @@ class CaptureChessEnv(gym.Env, MultiAgentEnv):
         Create a mask of legal actions
         Returns: np.ndarray with shape (4096,)
         """
-        self.action_space = np.zeros(shape=(4096,))
+        action_space = np.zeros(shape=(4096,))
         # use chess legal moves generator to generate legal actions based on current state of the board.
         moves = [[x.from_square, x.to_square]
                  for x in self.board.generate_legal_moves()]
         for move in moves:
-            self.action_space[move[0] + 64 * move[1]] = 1
-        return self.action_space
+            action_space[move[0] + 64 * move[1]] = 1
+        return action_space
 
     def get_material_value(self):
         """
@@ -251,18 +247,20 @@ class CaptureChessEnv(gym.Env, MultiAgentEnv):
             # If there are multiple valid moves, pick a random one.
             move = np.random.choice(moves)
         return move
-    
+
     def render(self, mode='human'):
         # import cairocffi as cairo
         if mode == 'rgb_array':
             import cairosvg
             tree = cairosvg.parser.Tree(bytestring=self.to_svg())
             surface = cairosvg.surface.PNGSurface(tree, None, 96)
-            argb = np.frombuffer( surface.cairo.get_data(), dtype=np.uint8 ).reshape( 400, 400, 4 )
-            rgba = np.zeros((400,400,3), dtype=np.uint8)
-            rgba[:,:,0] = argb[:,:,2]
-            rgba[:,:,1] = argb[:,:,1]
-            rgba[:,:,2] = argb[:,:,0]
+            argb = np.frombuffer(surface.cairo.get_data(),
+                                 dtype=np.uint8).reshape(400, 400, 4)
+            rgba = np.zeros((400, 400, 3), dtype=np.uint8)
+            rgba[:, :, 0] = argb[:, :, 2]
+            rgba[:, :, 1] = argb[:, :, 1]
+            rgba[:, :, 2] = argb[:, :, 0]
             return rgba
         else:
-            super(CaptureChessEnv, self).render(mode=mode) # just raise an exception
+            super(CaptureChessEnv, self).render(
+                mode=mode)  # just raise an exception
