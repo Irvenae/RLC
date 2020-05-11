@@ -28,7 +28,7 @@ def policy_gradient_loss(policy, model, dist_class, train_batch):
     action_dist = dist_class(logits, model)
     # call softmax_cross_entropy_with_logits
     action_cross_entropy = action_dist.logp(train_batch[SampleBatch.ACTIONS])
-    return K.mean(action_cross_entropy * train_batch[Postprocessing.ADVANTAGES])
+    return - K.mean(action_cross_entropy * train_batch[Postprocessing.ADVANTAGES])
 
 
 def calculate_advantages(policy,
@@ -37,25 +37,7 @@ def calculate_advantages(policy,
                          episode=None):
     sample_batch[Postprocessing.ADVANTAGES] = discount(
         sample_batch[SampleBatch.REWARDS],  policy.config["gamma"])
-    print(sample_batch[Postprocessing.ADVANTAGES])
     return sample_batch
-
-
-def sgd_optimizer(policy, config):
-    return tf.compat.v1.keras.optimizers.SGD(lr=config["lr"], momentum=0.0, decay=0.0, nesterov=False, clipnorm=1.0)
-
-
-def sgd_compute_gradients(policy, optimizer, loss):
-    # keras function does not have compute_gradients function, it uses gradientTape for this:
-    with tf.GradientTape() as tape:
-        tape.watch(policy.model.base_model.trainable_weights)
-        grads = tape.gradient(loss, policy.model.base_model.trainable_weights)
-    return [(grads[i], var) for (i, var) in enumerate(policy.model.base_model.trainable_weights)]
-
-
-def sgd_apply_gradients(self, optimizer, grads_and_vars):
-    return optimizer.apply_gradients(grads_and_vars)
-
 
 # We make a policy with gradients using the PolicyGradientModel.
 # For this we define a specific policy gradient loss.
@@ -64,11 +46,10 @@ def sgd_apply_gradients(self, optimizer, grads_and_vars):
 PolicyGradient = build_tf_policy(
     name="PolicyGradient",
     loss_fn=policy_gradient_loss,
-    postprocess_fn=calculate_advantages,
+    postprocess_fn=calculate_advantages,)
     # If no optimizer is given, the Adam optimizer is used.
-    optimizer_fn=sgd_optimizer,
-    gradients_fn=sgd_compute_gradients,
-    apply_gradients_fn=sgd_apply_gradients,)
+    # Difficult to get keras optimizer working because of no compute_gradients() function.
+    # You would need to use a gradient tape for this where the model is called.
 
 
 class PolicyRandom(Policy):
