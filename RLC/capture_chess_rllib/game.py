@@ -1,14 +1,12 @@
 from ray import tune
 from ray.rllib.agents.trainer import with_common_config
-# Restructuring in the docs, new release (0.8.5) will have exection folder
-# from ray.rllib.execution.rollout_ops import ParallelRollouts, ConcatBatches
-# from ray.rllib.execution.train_ops import TrainOneStep
-# from ray.rllib.execution.metric_ops import StandardMetricsReporting
-# currently this lives in experimental
-from ray.rllib.utils.experimental_dsl import ParallelRollouts, ConcatBatches, TrainOneStep, StandardMetricsReporting
+from ray.rllib.execution.rollout_ops import ParallelRollouts, ConcatBatches
+from ray.rllib.execution.train_ops import TrainOneStep
+from ray.rllib.execution.metric_ops import StandardMetricsReporting
 from ray.rllib.agents.trainer_template import build_trainer
 from ray.rllib.optimizers import SyncSamplesOptimizer
 from ray.rllib.rollout import create_parser, run
+from ray.rllib.agents.callbacks import DefaultCallbacks
 
 from RLC.capture_chess_rllib.policies import PolicyGradient, PolicyRandom
 from RLC.capture_chess_rllib.environment import CaptureChessEnv
@@ -23,7 +21,7 @@ from RLC.utils import dotdict
 
 
 def execution_plan(workers, config):
-    # Experimental distributed execution impl; enable with "use_exec_api": True.
+    # enable with "use_exec_api": True.
     # Collects experiences in parallel from multiple RolloutWorker actors.
     rollouts = ParallelRollouts(workers, mode="bulk_sync")
 
@@ -61,7 +59,14 @@ PGTrainer = build_trainer(
 )
 
 
-def play_random_games(n_episodes):
+class MyCallbacks(DefaultCallbacks):
+    def on_episode_end(self, worker, base_env,
+                       policies, episode,
+                       **kwargs):
+        episode.custom_metrics["winner"] = base_env.get_unwrapped()[0].determine_winner()
+
+
+def play_random_games(n_training_rounds):
     """
     Plays a number of games against a player playing at random.
     Expect in the episode_reward always a value of 0.0 because sum over all players should always be zero.
@@ -75,15 +80,16 @@ def play_random_games(n_episodes):
             return "learned"
         else:
             return "random"
+    episode_length = 100
 
     config = {
         "env": CaptureChessEnv,
-        "gamma": 0.9,
+        "gamma": 0.5,
         "lr": 0.1,
         "num_workers": 0,   # Will spin up cores = num_workers + 1
-        # "num_envs_per_worker": 4,
-        "rollout_fragment_length": 100,  # Fragment to run in worker.
-        "train_batch_size": 100,    # size of a batch for training in steps.
+        "num_envs_per_worker": 4,
+        "rollout_fragment_length": 10 * episode_length,  # Fragment to run in worker.
+        "train_batch_size": 10 * episode_length,    # size of a batch for training in steps.
         "batch_mode": "complete_episodes",
         "multiagent": {
             "policies_to_train": ["learned"],
@@ -101,13 +107,19 @@ def play_random_games(n_episodes):
             },
             "policy_mapping_fn": select_policy,
         },
+        # # Enable evaluation, once per training iteration.
+        # "evaluation_interval": 1,
+
+        # # Run 10 episodes each time evaluation runs.
+        # "evaluation_num_episodes": 100,
+        "callbacks": MyCallbacks,
     }
     # use restore with path to continue training from previous.
-    tune.run(PGTrainer, checkpoint_freq=1, checkpoint_at_end=True,
-             stop={"episodes_total": n_episodes}, config=config)
+    tune.run(PGTrainer, checkpoint_at_end=True,
+                      stop={"training_iteration": n_training_rounds}, config=config)
 
 
-def load_and_evaluate(dir_checkpoint, n_episodes, video_dir= None):
+def load_and_evaluate(dir_checkpoint, n_episodes, video_dir=None):
     """
     Load a previously stored training session and evaluate.
     e.g. dir_checkpoint: "/Users/irvenaelbrecht/ray_results/PolicyGradientTrainer/PolicyGradientTrainer_CaptureChessEnv_0_2020-05-07_08-41-44p2dp1i_z/checkpoint_1/checkpoint-1"
@@ -128,5 +140,5 @@ def load_and_evaluate(dir_checkpoint, n_episodes, video_dir= None):
     tune.register_trainable("PolicyGradientTrainer", PGTrainer)
     parser = create_parser()
     args = dotdict({"run": "PolicyGradientTrainer", "episodes": n_episodes,
-                    "checkpoint": dir_checkpoint, "steps": 0, "no_render": True, "workers":None, "video_dir": video_dir, "config": {}})
+                    "checkpoint": dir_checkpoint, "steps": 0, "no_render": True, "workers": None, "video_dir": video_dir, "config": {}})
     run(args, parser)
