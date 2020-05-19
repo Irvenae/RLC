@@ -1,95 +1,69 @@
 from ray import tune
-from ray.rllib.agents.trainer import with_common_config
-from ray.rllib.execution.rollout_ops import ParallelRollouts, ConcatBatches
-from ray.rllib.execution.train_ops import TrainOneStep
-from ray.rllib.execution.metric_ops import StandardMetricsReporting
-from ray.rllib.agents.trainer_template import build_trainer
-from ray.rllib.optimizers import SyncSamplesOptimizer
 from ray.rllib.rollout import create_parser, run
-from ray.rllib.agents.callbacks import DefaultCallbacks
 
 from RLC.capture_chess_rllib.policies import PolicyGradient, PolicyRandom
 from RLC.capture_chess_rllib.environment import CaptureChessEnv
 from RLC.capture_chess_rllib.models import register_models
+from RLC.capture_chess_rllib.game_internal import PGTrainer, InfoNumberRounds, self_play_workflow 
 from RLC.utils import dotdict
 
-# Define a trainer using our own defined policy.
-# The trainer will run multiple workers and update the policy given by the ruling underneath.
-# (this is the standard PG as implemented in RLLib)
-# Evaluation of a policy can be done with the function rollout in rollout.py.
-# https://github.com/ray-project/ray/blob/master/rllib/examples/rollout_worker_custom_workflow.py
+def self_play(trainer="PolicyGradientTrainer", restore_path = None):
+    # TODO: Change name model dependent on used trainer.
+    register_trainers()
+
+    episode_length = 100
+    config = {
+        "env": CaptureChessEnv,
+        "gamma": 0.9,
+        "num_workers": 0,   # Will spin up cores = num_workers + 1
+        "num_envs_per_worker": 4,
+        # Fragment to run in worker.
+        "rollout_fragment_length": 10 * episode_length,
+        # size of a batch for training in steps.
+        "train_batch_size": 500 * episode_length,
+        "batch_mode": "complete_episodes",
+        "checkpoint": restore_path,
+        # specifics for self-play
+        "trainer": trainer,
+        "model": { "custom_model": "pg_model"},
+        "lr_schedule":[0.3, 0.1],
+        "evaluation_num_episodes": 500,
+        "percentage_equal": 0.05,
+        "training_rounds": InfoNumberRounds(1, 10, 1),
+        "evaluation_rounds": InfoNumberRounds(1, 10, 1),
+    }
+
+    # use restore with path to continue training from previous.
+    self_play_workflow(config)
 
 
-def execution_plan(workers, config):
-    # enable with "use_exec_api": True.
-    # Collects experiences in parallel from multiple RolloutWorker actors.
-    rollouts = ParallelRollouts(workers, mode="bulk_sync")
-
-    # Combine experiences batches until we hit `train_batch_size` in size.
-    # Then, train the policy on those experiences and update the workers.
-    train_op = rollouts \
-        .combine(ConcatBatches(
-            min_batch_size=config["train_batch_size"])) \
-        .for_each(TrainOneStep(workers))
-
-    # Add on the standard episode reward, etc. metrics reporting. This returns
-    # a LocalIterator[metrics_dict] representing metrics for each train step.
-    return StandardMetricsReporting(train_op, workers, config)
-
-
-# Because we need to set the setting to True on default, we will override the parameters.
-DEFAULT_CONFIG = with_common_config({
-    # No remote workers by default.
-    "num_workers": 0,
-    # Learning rate.
-    "lr": 0.0004,
-    # Use the execution plan API instead of policy optimizers.
-    "use_exec_api": True,
-})
-
-# Define the trainer.
-# From the _setup() function in trainer.py, we can see how the env is setup.
-# The main function is _train() in trainer_template.py.
-# Here we can see how the execution_plan or other training is called.
-PGTrainer = build_trainer(
-    name="PolicyGradientTrainer",
-    default_config=DEFAULT_CONFIG,
-    default_policy=PolicyGradient,
-    execution_plan=execution_plan,
-)
-
-
-class MyCallbacks(DefaultCallbacks):
-    def on_episode_end(self, worker, base_env,
-                       policies, episode,
-                       **kwargs):
-        episode.custom_metrics["winner"] = base_env.get_unwrapped()[0].determine_winner()
-
-
-def play_random_games(n_training_rounds):
+def play_random_games(n_training_rounds, trainer="PolicyGradientTrainer"):
     """
     Plays a number of games against a player playing at random.
     Expect in the episode_reward always a value of 0.0 because sum over all players should always be zero.
     (when the reward is positive for player1 it is negative for player2)
     """
+    # TODO: Change name model dependent on used trainer.
     # register the models that can be used in the config.
-    register_models()
+    register_trainers()
 
     def select_policy(agent_id):
         if agent_id == "player1":
             return "learned"
         else:
             return "random"
-    episode_length = 100
 
+    episode_length = 100
     config = {
         "env": CaptureChessEnv,
-        "gamma": 0.5,
-        "lr": 0.1,
-        "num_workers": 0,   # Will spin up cores = num_workers + 1
+        "gamma": 0.9,
+        "lr": 0.3,
+        "num_workers": 3,   # Will spin up cores = num_workers + 1
         "num_envs_per_worker": 4,
-        "rollout_fragment_length": 10 * episode_length,  # Fragment to run in worker.
-        "train_batch_size": 10 * episode_length,    # size of a batch for training in steps.
+        # Fragment to run in worker.
+        "rollout_fragment_length": 10 * episode_length,
+        # size of a batch for training in steps.
+        "train_batch_size": 500 * episode_length,
         "batch_mode": "complete_episodes",
         "multiagent": {
             "policies_to_train": ["learned"],
@@ -112,11 +86,10 @@ def play_random_games(n_training_rounds):
 
         # # Run 10 episodes each time evaluation runs.
         # "evaluation_num_episodes": 100,
-        "callbacks": MyCallbacks,
     }
     # use restore with path to continue training from previous.
-    tune.run(PGTrainer, checkpoint_at_end=True,
-                      stop={"training_iteration": n_training_rounds}, config=config)
+    tune.run(trainer, checkpoint_at_end=True,
+             stop={"training_iteration": n_training_rounds}, config=config)
 
 
 def load_and_evaluate(dir_checkpoint, n_episodes, video_dir=None):
@@ -136,9 +109,14 @@ def load_and_evaluate(dir_checkpoint, n_episodes, video_dir=None):
                 - self.rewards += reward -> self.rewards += 0 in after_step(self, observation, reward, done, info)
     """
     # register the models that can be used in the config.
-    register_models()
-    tune.register_trainable("PolicyGradientTrainer", PGTrainer)
+    register_trainers()
+
     parser = create_parser()
     args = dotdict({"run": "PolicyGradientTrainer", "episodes": n_episodes,
                     "checkpoint": dir_checkpoint, "steps": 0, "no_render": True, "workers": None, "video_dir": video_dir, "config": {}})
     run(args, parser)
+
+def register_trainers():
+    # register models so we can use name.
+    register_models()
+    tune.register_trainable("PolicyGradientTrainer", PGTrainer)
