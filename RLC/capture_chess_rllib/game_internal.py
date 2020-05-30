@@ -3,6 +3,8 @@ import numpy as np
 import collections
 from scipy.stats import binom_test
 import copy
+import math
+import os
 
 import ray
 from ray import tune
@@ -16,6 +18,7 @@ from ray.rllib.optimizers import SyncSamplesOptimizer
 from ray.rllib.rollout import DefaultMapping
 from ray.rllib.agents.callbacks import DefaultCallbacks
 from ray.rllib.evaluation.worker_set import WorkerSet
+from ray.rllib.evaluation.metrics import collect_episodes
 from ray.rllib.env import MultiAgentEnv
 from ray.rllib.utils.space_utils import flatten_to_single_ndarray
 from ray.tune.registry import get_trainable_cls
@@ -114,21 +117,35 @@ def self_play_workflow(config):
     ##########################################
     # Set config of trainer and evaluators
     ##########################################
+    check_dir = 'logs'
+    log_file = 'logs/logs.txt'
+    if os.path.exists(log_file):
+        os.remove(log_file)
+
     if config.get("evaluation_num_episodes", None) is None:
         config["evaluation_num_episodes"] = 1
     trainer_fn = get_trainable_cls(config["trainer"])
     lr_idx = 0
 
     def select_policy_train(agent_id):
-        # sometimes will pit non learning against each other.
-        return np.random.choice(["learning", "previous", "random"], 1,
-                                p=[.8, .1, .1])[0]
+        if agent_id == "player1":
+            return np.random.choice(["learning_white", "previous_white", "random"], 1,
+                                    p=[.6, .3, .1])[0]
+        else:
+            return np.random.choice(["learning_black", "previous_black", "random"], 1,
+                                    p=[.6, .3, .1])[0]
 
     def select_policy_eval(learning_player, agent_id):
-        if agent_id == learning_player:
-            return "learning"
+        if learning_player == "player1":
+            if agent_id == "player1":
+                return "learning_white"
+            else:
+                return "previous_black"
         else:
-            return "previous"
+            if agent_id == "player2":
+                return "learning_black"
+            else:
+                return "previous_white"
 
     trainer_config = copy.deepcopy(config)
     # remove self-play parameters
@@ -143,23 +160,30 @@ def self_play_workflow(config):
 
     trainer_config["lr"] = config["lr_schedule"][lr_idx]
     trainer_config["multiagent"] = {
-        "policies_to_train": ["learning"],
+        "policies_to_train": ["learning_white", "learning_black"],
         "policies": {
             "random": (PolicyRandom, config["env"].observation_space, config["env"].action_space,
                        {}),
-            "learning": (None, config["env"].observation_space, config["env"].action_space,
-                         {
-                # model needs to be set here because otherwise we will tie the policy to the environment and the model.
+            "learning_white": (None, config["env"].observation_space, config["env"].action_space,
+                               {
                 "model": config["model"]
             }),
-            "previous": (None, config["env"].observation_space, config["env"].action_space,
-                         {
-                # model needs to be set here because otherwise we will tie the policy to the environment and the model.
+            "learning_black": (None, config["env"].observation_space, config["env"].action_space,
+                               {
+                "model": config["model"]
+            }),
+            "previous_white": (None, config["env"].observation_space, config["env"].action_space,
+                               {
+                "model": config["model"]
+            }),
+            "previous_black": (None, config["env"].observation_space, config["env"].action_space,
+                               {
                 "model": config["model"]
             }),
         },
-        "policy_mapping_fn": select_policy_train
+        "policy_mapping_fn": select_policy_train,
     }
+    trainer_config["train_batch_size"] = 2 * config["train_batch_size"]
 
     eval_config_player1 = copy.deepcopy(trainer_config)
     eval_config_player1["multiagent"]["policy_mapping_fn"] = partial(
@@ -174,7 +198,6 @@ def self_play_workflow(config):
     ##########################################
     # Run train / evaluation rounds
     ##########################################
-    ray.init()
 
     def update_for_next_loop(total_rounds, rounds, reset=False):
         done = False
@@ -187,6 +210,15 @@ def self_play_workflow(config):
 
         return done, next_num_rounds
 
+    ray.init()
+
+    trainer = trainer_fn(
+        env=trainer_config["env"], config=trainer_config)
+    evaluator_player1 = trainer_fn(
+        env=eval_config_player1["env"], config=eval_config_player1)
+    evaluator_player2 = trainer_fn(
+        env=eval_config_player1["env"], config=eval_config_player2)
+
     total_rounds_training = 0
     done, training_rounds = update_for_next_loop(
         total_rounds_training, config["training_rounds"], True)
@@ -196,98 +228,158 @@ def self_play_workflow(config):
         ##########################################
         # Train
         ##########################################
-        trainer = trainer_fn(
-            env=trainer_config["env"], config=trainer_config)
-        if prev_it_state is not None:
-            trainer.restore(prev_it_state)
-        for _ in range(training_rounds):
-            result = trainer.train()
+        try:
+            if prev_it_state is not None:
+                trainer.restore(prev_it_state)
+            for _ in range(training_rounds):
+                trainer.train()
+            state = trainer.save(check_dir)
+            # trainer.stop()
 
-        total_rounds_training += training_rounds
-        state = trainer.save()
-        trainer.stop()
+            total_rounds_training += training_rounds
+        except Exception:
+            trainer.stop()
+            with open(log_file, 'a') as f:
+                f.write("Model failed, updating optimizer\n")
+            lr_idx += 1
+            if lr_idx < len(config["lr_schedule"]):
+                trainer_config["lr"] = config["lr_schedule"][lr_idx]
+                trainer = trainer_fn(
+                    env=trainer_config["env"], config=trainer_config)
+                total_rounds_training = 0
+                done, training_rounds = update_for_next_loop(
+                    total_rounds_training, config["training_rounds"], True)
+                prev_it_state = prev_state
+            else:
+                done = True
+            continue  # try again.
 
         ##########################################
         # Evaluate
         ##########################################
-        total_eval_rounds = 0
-        comparison_wrt_equal = 1
-        eval_results = []  # +1 new strategy, 0 remise, -1 old strategy
-        done_eval, eval_rounds = update_for_next_loop(
-            total_eval_rounds, config["evaluation_rounds"], True)
-        while not done_eval:
-            num_episodes = eval_rounds * config["evaluation_num_episodes"] // 2
-
-            evaluator = trainer_fn(
-                env=eval_config_player1["env"], config=eval_config_player1)
-            evaluator.restore(state)
-            eval_results.extend(own_rollout(evaluator, num_episodes))
-
-            evaluator = trainer_fn(
-                env=eval_config_player2["env"], config=eval_config_player2)
-            evaluator.restore(state)
-            eval_results.extend(
-                [-x for x in own_rollout(evaluator, num_episodes)])  # negate results to make learning policy as positive winner.
-
-            total_eval_rounds += num_episodes * \
-                2 // config["evaluation_num_episodes"]
-
-            # test if good enough change (ignore remises)
-            num_pos = sum(x == 1 for x in eval_results)
-            num_neg = sum(x == -1 for x in eval_results) 
-            comparison_wrt_equal = binom_test(num_pos, num_pos + num_neg, 0.5)
-
+        try:
+            total_eval_rounds = 0
+            comparison_wrt_equal = 1
+            eval_results1 = []
+            eval_results2 = []
+            # maximal evaluation rounds determined by training, does not make sense to evaluate more than training rounds.
+            eval_info = InfoNumberRounds(config["evaluation_rounds"].min, min(
+                config["evaluation_rounds"].max, total_rounds_training), config["evaluation_rounds"].step)
             done_eval, eval_rounds = update_for_next_loop(
-                total_eval_rounds, config["evaluation_rounds"])
-            if config["percentage_equal"] > comparison_wrt_equal:
-                done_eval = True
+                total_eval_rounds, eval_info, True)
+            while not done_eval:
+                num_episodes = eval_rounds * config["evaluation_num_episodes"]
 
-        print("results: trained agent wins: ", sum(x == 1 for x in eval_results), " previous agent wins: ", sum(
-            x == -1 for x in eval_results), " remises: ", sum(x == 0 for x in eval_results))
-        print("chance result for equal opponents: ", comparison_wrt_equal)
+                evaluator_player1.restore(state)
+                eval_results1.extend(own_evaluation(
+                    evaluator_player1, eval_rounds))
+                num_pos = sum(x == 1 for x in eval_results1)
+                num_neg = sum(x == -1 for x in eval_results1)
+                comparison_wrt_equal1 = binom_test(
+                    num_pos, num_pos + num_neg, 0.5)
+                with open(log_file, 'a') as f:
+                    f.write(
+                        f'results1: trained agent wins: {num_pos} previous agent wins: {num_neg} remises: {sum(x == 0 for x in eval_results1)} \n')
+                    f.write(
+                        f'chance result for equal opponents: {comparison_wrt_equal1} \n')
+
+                evaluator_player2.restore(state)
+                eval_results2.extend(own_evaluation(
+                    evaluator_player2, eval_rounds))
+                num_pos = sum(x == 1 for x in eval_results2)
+                num_neg = sum(x == -1 for x in eval_results2)
+                comparison_wrt_equal2 = binom_test(
+                    num_neg, num_pos + num_neg, 0.5)
+                with open(log_file, 'a') as f:
+                    f.write(
+                        f'results2: trained agent wins: {num_neg} previous agent wins: {num_pos} remises: {sum(x == 0 for x in eval_results2)} \n')
+                    f.write(
+                        f'chance result for equal opponents: {comparison_wrt_equal2} \n')
+
+                total_eval_rounds += eval_rounds
+
+                done_eval, eval_rounds = update_for_next_loop(
+                    total_eval_rounds, eval_info)
+                if config["percentage_equal"] > comparison_wrt_equal1 or config["percentage_equal"] > comparison_wrt_equal2:
+                    # one of players improved
+                    done_eval = True
+        except Exception:
+            with open(log_file, 'a') as f:
+                f.write("Model failed, need to update optimizer\n")
+            # trigger update optimizer
+            comparison_wrt_equal1 = 0
+            comparison_wrt_equal2 = 0
+            eval_results1 = [-1]
+            eval_results2 = [1]
 
         ##########################################
         # Update policy
         ##########################################
 
-        if config["percentage_equal"] > comparison_wrt_equal:
+        if config["percentage_equal"] > comparison_wrt_equal1 or config["percentage_equal"] > comparison_wrt_equal2:
             # results differ enough
-            if sum(x == 1 for x in eval_results) > sum(x == -1 for x in eval_results):
-                print("Model improved")
+            if sum(x == 1 for x in eval_results1) > sum(x == -1 for x in eval_results1) and sum(x == -1 for x in eval_results2) > sum(x == 1 for x in eval_results2):
+                with open(log_file, 'a') as f:
+                    f.write("Model improved\n")
                 total_rounds_training = 0
                 done, training_rounds = update_for_next_loop(
                     total_rounds_training, config["training_rounds"], True)
                 # reupdate previous
-                key_previous_val_learning = {}
-                for (k, v), (k2, v2) in zip(trainer.get_policy("previous").get_weights().items(),
-                                            trainer.get_policy("learning").get_weights().items()):
-                    key_previous_val_learning[k] = v2
+                key_previous_val_learning_white = {}
+                for (k, v), (k2, v2) in zip(trainer.get_policy("previous_white").get_weights().items(),
+                                            trainer.get_policy("learning_white").get_weights().items()):
+                    key_previous_val_learning_white[k] = v2
+                key_previous_val_learning_black = {}
+                for (k, v), (k2, v2) in zip(trainer.get_policy("previous_black").get_weights().items(),
+                                            trainer.get_policy("learning_black").get_weights().items()):
+                    key_previous_val_learning_black[k] = v2
                 # set weights
-                trainer.set_weights({"previous": key_previous_val_learning,
+                trainer.set_weights({"previous_white": key_previous_val_learning_white,
+                                     "previous_black": key_previous_val_learning_black,
                                      # no change
-                                     "learning": trainer.get_policy("learning").get_weights()
+                                     "learning_white": trainer.get_policy("learning_white").get_weights(),
+                                     "learning_black": trainer.get_policy("learning_black").get_weights(),
                                      })
+                if prev_state is not None:
+                    trainer.delete_checkpoint(prev_state)
+                trainer.delete_checkpoint(state)
 
-                prev_it_state = trainer.save()
+                prev_it_state = trainer.save(check_dir)
                 prev_state = prev_it_state
-            else:
-                print("Model got worse, updating optimizer")
+            elif sum(x == 1 for x in eval_results1) < sum(x == -1 for x in eval_results1) and sum(x == -1 for x in eval_results2) < sum(x == 1 for x in eval_results2):
+                with open(log_file, 'a') as f:
+                    f.write("Model got worse, updating optimizer\n")
+                trainer.stop()
                 lr_idx += 1
-                if len(config["learning_rates"]) < lr_idx:
-                    trainer_config["lr"] = config["learning_rates"][lr_idx]
+                if lr_idx < len(config["lr_schedule"]):
+                    trainer_config["lr"] = config["lr_schedule"][lr_idx]
+                    trainer = trainer_fn(
+                        env=trainer_config["env"], config=trainer_config)
                     total_rounds_training = 0
                     done, training_rounds = update_for_next_loop(
                         total_rounds_training, config["training_rounds"], True)
                     prev_it_state = prev_state
                 else:
                     done = True
+            else:
+                with open(log_file, 'a') as f:
+                    f.write(
+                        "One player improved one got worse, trying more learning iterations.\n")
+                done, training_rounds = update_for_next_loop(
+                    total_rounds_training, config["training_rounds"])
+                prev_it_state = state
         else:
-            # unable to give results, try more iterations
-            print("Unable to evaluate, trying more learning iterations.")
-            total_rounds_training = 0
+            with open(log_file, 'a') as f:
+                f.write("Unable to evaluate, trying more learning iterations.\n")
             done, training_rounds = update_for_next_loop(
                 total_rounds_training, config["training_rounds"])
-            prev_it_state = trainer.save()
+            prev_it_state = state
+
+    trainer.restore(prev_it_state)
+    trainer.save()
+    print("Checkpoint and trainer saved at: ", trainer.logdir)
+    with open(log_file, 'a') as f:
+        f.write(f'Checkpoint and trainer saved at: {trainer.logdir} \n')
 
 
 def own_rollout(agent,
@@ -349,3 +441,29 @@ def own_rollout(agent,
             results.append(env.determine_winner())
 
     return results
+
+
+def own_evaluation(agent, num_rounds):
+    results = []
+    num_episodes = num_rounds * agent.config["evaluation_num_episodes"]
+    if agent.config["num_workers"] == 0:
+        for _ in range(num_episodes):
+            agent.evaluation_workers.local_worker().sample()
+    else:
+        while len(results) < num_episodes:
+            # Calling .sample() runs exactly one episode per worker due to how the
+            # eval workers are configured.
+            ray.get([
+                w.sample.remote()
+                for w in agent.workers.remote_workers()
+            ])
+
+            episodes, _ = collect_episodes(None,
+                                           agent.workers.remote_workers(),
+                                           [])
+
+            for episode in episodes:
+                for key, winner in episode.custom_metrics.copy().items():
+                    results.append(winner)
+
+    return results[:num_episodes]

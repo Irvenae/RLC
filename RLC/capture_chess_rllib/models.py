@@ -67,7 +67,7 @@ class PolicyGradientModel(TFModelV2):
         value_out = Dense(1, name="value_out", activation=None)(output_layer)
         self.base_model = Model(inputs=[input_layer, legal_moves], outputs=[
                                 output_layer, value_out])
-        self.base_model.summary()
+        # self.base_model.summary()
         self.register_variables(self.base_model.weights)
 
     def forward(self, input_dict, state, seq_lens):
